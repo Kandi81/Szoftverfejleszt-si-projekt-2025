@@ -1,4 +1,3 @@
-# inbox.py
 import resource.config
 from gmailclient import GmailClient
 from geminiclient import GeminiClient
