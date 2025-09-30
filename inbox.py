@@ -37,3 +37,6 @@ def summarize():
 
 summarize()
 
+
+
+# Zita ok
