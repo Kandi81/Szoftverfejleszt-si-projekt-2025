@@ -37,9 +37,3 @@ def summarize():
 
 summarize()
 
-
-
-
-
-
-# Erika ok
