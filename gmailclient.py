@@ -7,7 +7,11 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = [
+"https://www.googleapis.com/auth/gmail.labels",
+"https://www.googleapis.com/auth/gmail.modify",
+"https://www.googleapis.com/auth/gmail.settings.basic"
+]
 
 class GmailClient:
     def __init__(self,
@@ -145,7 +149,7 @@ class GmailClient:
             'labelListVisibility' : label_list_visibility,
             'messageListVisibility' : message_list_visibility
         }
-        created_label = self.users().labels().create(userId='me', body=label).execute()
+        created_label = self.service.users().labels().create(userId='me', body=label).execute()
         return created_label
 
     def list_labels(self):
@@ -157,7 +161,7 @@ class GmailClient:
         return self.service.users().labels().get(userId='me', id=label_id).execute()
 
     def modify_label(self, label_id, **updates):
-        label = self.service.users().labels().update(userId='me', id=label_id, body=label).execute()
+        label = self.service.users().labels().update(userId='me', id=label_id).execute()
         for key, value in updates.items():
             label[key] = value
         updated_label = self.service.users().labels().update(userId='me', id=label_id, body=label).execute()

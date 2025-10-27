@@ -5,11 +5,9 @@ from gmailclient import GmailClient
 SCOPES = ["https://www.googleapis.com/auth/gmail.labels"]
 
 
-
-
 def cimke_lekerdezes():
     client = GmailClient(credentials_path="resource/credentials.json", token_path="resource/token.json")
-    client.authenticate()  # uses the existing quickstart token flow
+    client.authenticate()
     labels = client.list_labels()
     for label in labels:
         print(f"{label['name']} (ID: {label['id']})")
@@ -19,21 +17,14 @@ def alap_cimkek_hozzaadasa():
     labels = ['p1', 'p2']
     created_labels = []
     client = GmailClient(credentials_path="resource/credentials.json", token_path="resource/token.json")
-    client.authenticate()  # uses the existing quickstart token flow
-    # Új címke létrehozása
-    name = 'Proba1'
-    label = client.create_label(name)
-    print(f'Label "{label["name"]}" created')
-    created_labels.append(label)
-    client.create_label( f'{label["name"]}')
-    print(f'{label["name"]} created')
+    client.authenticate()
+
+    # Végigmegyünk a címkéken és mindegyiket létrehozzuk
+    for label_name in labels:
+        label = client.create_label(label_name)  # paraméterként add meg a nevet!
+        print(f'Label "{label["name"]}" created (ID: {label["id"]})')
+        created_labels.append(label)
+
+    return created_labels
 
 alap_cimkek_hozzaadasa()
-
-                
-
-
-alap_cimkek_hozzaadasa()
-
-
-
