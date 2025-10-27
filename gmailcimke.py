@@ -27,4 +27,5 @@ def alap_cimkek_hozzaadasa():
 
     return created_labels
 
+# cimke hozzaadasa
 alap_cimkek_hozzaadasa()
