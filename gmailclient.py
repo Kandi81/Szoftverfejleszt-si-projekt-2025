@@ -138,7 +138,40 @@ class GmailClient:
         subject = headers.get("Subject", "(no subject)")
         text = self._extract_text_from_payload(full.get("payload", {})) or full.get("snippet", "")
         return {"subject": subject, "text": text}
+    #Jozsi
+    def create_label(self, name, label_list_visibility='labelShow', message_list_visibility='show'):
+        label = {
+            'name' : name,
+            'labelListVisibility' : label_list_visibility,
+            'messageListVisibility' : message_list_visibility
+        }
+        created_label = self.users().labels().create(userId='me', body=label).execute()
+        return created_label
 
+    def list_labels(self):
+        results = self.service.users().labels().list(userId='me').execute()
+        labels = results.get('labels', [])
+        return labels
+
+    def get_label_details(self, label_id):
+        return self.service.users().labels().get(userId='me', id=label_id).execute()
+
+    def modify_label(self, label_id, **updates):
+        label = self.service.users().labels().update(userId='me', id=label_id, body=label).execute()
+        for key, value in updates.items():
+            label[key] = value
+        updated_label = self.service.users().labels().update(userId='me', id=label_id, body=label).execute()
+        return updated_label
+
+    def delete_label(self, label_id):
+        self.service.users().labels().delete(userId='me', id=label_id).execute()
+
+    def map_label_name_to_id(self, label_name):
+        labels = self.list_labels()
+        label = next((label for label in labels if label['name'] == label_name), None)
+        return label['id'] if label else None
+
+    #/Jozsi
 if __name__ == "__main__":
     try:
         client = GmailClient(credentials_path="resource\credentials.json", token_path="resource/token.json")
