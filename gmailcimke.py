@@ -47,5 +47,4 @@ def cimke():
             print(f' Létrehozva: "{created["name"]}" (ID: {created["id"]})')
             label_ids.append(created["id"])
 
-
 cimke()
