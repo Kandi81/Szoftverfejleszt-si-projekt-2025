@@ -14,7 +14,7 @@ def cimke_lekerdezes():
 
 
 def alap_cimkek_hozzaadasa():
-    labels = ['p1', 'p2']
+    labels = ['p3', 'p4']
     created_labels = []
     client = GmailClient(credentials_path="resource/credentials.json", token_path="resource/token.json")
     client.authenticate()
@@ -27,5 +27,25 @@ def alap_cimkek_hozzaadasa():
 
     return created_labels
 
-# cimke hozzaadasa
-alap_cimkek_hozzaadasa()
+def cimke():
+    client = GmailClient(credentials_path="resource/credentials.json", token_path="resource/token.json")
+    client.authenticate()
+    letezo_cimkek = client.list_labels()
+    letezo_cimke_nevek = {label["name"]: label["id"] for label in letezo_cimkek}
+    letrehozando_cimkek = [
+        "Vezetőség", "Hiányos", "Hibás csatolmány", "Hírlevél",
+        "Neptun", "Tanulói", "Milton", "Moodle", "Egyéb"
+    ]
+    label_ids = []
+    for name in letrehozando_cimkek:
+        if name in letezo_cimke_nevek:
+            print(f' Címke már létezik: "{name}" (ID: {letezo_cimke_nevek[name]})')
+            label_ids.append(letezo_cimke_nevek[name])
+        else:
+            print(f' Címke nem létezik, létrehozás: "{name}"')
+            created = client.create_label(name)
+            print(f' Létrehozva: "{created["name"]}" (ID: {created["id"]})')
+            label_ids.append(created["id"])
+
+
+cimke()
