@@ -126,6 +126,24 @@ class GmailClient:
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         return headers.get("Subject", "(no subject)")
 
+    def get_subject_and_date(self, message_id: str) -> dict:
+        """
+        Fetch a message's Subject and Date efficiently using metadata format.
+        """
+        if not self.service:
+            raise RuntimeError("Call authenticate() first.")
+        msg = self.service.users().messages().get(
+            userId="me",
+            id=message_id,
+            format="metadata",
+            metadataHeaders=["Subject", "Date"]
+        ).execute()
+        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+        return {
+            "subject": headers.get("Subject", "(no subject)"),
+            "date": headers.get("Date", "")
+        }
+
     def get_message(self, message_id: str) -> Dict:
         """
         Fetch full message payload if needed later.
@@ -185,5 +203,3 @@ if __name__ == "__main__":
             print(m["id"], client.get_subject(m["id"]))
     except HttpError as e:
         print(f"Gmail API error: {e}")
-
-# z

@@ -1,9 +1,7 @@
-import resource.config
 from gmailclient import GmailClient
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/gmail.labels"]
-
 
 def cimke_lekerdezes():
     client = GmailClient(credentials_path="resource/credentials.json", token_path="resource/token.json")
@@ -11,7 +9,6 @@ def cimke_lekerdezes():
     labels = client.list_labels()
     for label in labels:
         print(f"{label['name']} (ID: {label['id']})")
-
 
 def alap_cimkek_hozzaadasa():
     labels = ['p3', 'p4']
