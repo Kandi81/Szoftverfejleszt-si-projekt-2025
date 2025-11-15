@@ -1,5 +1,6 @@
 # This code is generated using PyUIbuilder: [https://pyuibuilder.com](https://pyuibuilder.com)
 
+import sys
 import os
 import tkinter as tk
 from tkinter import ttk
@@ -10,6 +11,18 @@ from datetime import datetime
 import gmailclient
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 
 # Global variables - DEFINED ONLY ONCE
 all_items = []
@@ -289,7 +302,7 @@ def session_login():
     """Handle login/logout for Gmail"""
     global gmail_client
 
-    token_path = os.path.join("resource", "token.json")
+    token_path = resource_path(os.path.join("resource", "token.json"))
 
     # Check current state
     if btnsession.cget("text") == "Kijelentkezés":
@@ -303,7 +316,7 @@ def session_login():
     else:
         # Login
         try:
-            credentials_path = os.path.join("resource", "credentials.json")
+            credentials_path = resource_path(os.path.join("resource", "credentials.json"))
             gmail_client = gmailclient.GmailClient(
                 credentials_path=credentials_path,
                 token_path=token_path
@@ -328,12 +341,12 @@ def session_login():
 def check_initial_login_state():
     """Check if user is already logged in at startup"""
     global gmail_client
-    token_path = os.path.join("resource", "token.json")
+    token_path = resource_path(os.path.join("resource", "token.json"))
     if os.path.exists(token_path):
         btnsession.config(text="Kijelentkezés")
         # Automatically authenticate
         try:
-            credentials_path = os.path.join("resource", "credentials.json")
+            credentials_path = resource_path(os.path.join("resource", "credentials.json"))
             gmail_client = gmailclient.GmailClient(
                 credentials_path=credentials_path,
                 token_path=token_path
