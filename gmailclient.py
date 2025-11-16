@@ -8,14 +8,15 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 SCOPES = [
-"https://www.googleapis.com/auth/gmail.labels",
-"https://www.googleapis.com/auth/gmail.modify",
-"https://www.googleapis.com/auth/gmail.settings.basic"
+    "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.settings.basic"
 ]
+
 
 class GmailClient:
     def __init__(self,
-                 credentials_path: str = "resource\credentials.json",
+                 credentials_path: str = "resource\\credentials.json",
                  token_path: str = "token.json",
                  scopes: Optional[List[str]] = None):
         self.credentials_path = credentials_path
@@ -64,7 +65,8 @@ class GmailClient:
         # If content is not inline (e.g., attachmentId present), skip here.
         return ""
 
-    def _minimal_html_to_text(self, html: str) -> str:
+    @staticmethod
+    def _minimal_html_to_text(html: str) -> str:
         """
         Very light HTML-to-text conversion for previews.
         Consider a library (html2text, beautifulsoup4) for richer handling.
@@ -75,6 +77,31 @@ class GmailClient:
         txt = re.sub(r"<script.*?>.*?</script>", "", txt, flags=re.S | re.I)
         txt = re.sub(r"<[^>]+>", "", txt)
         return re.sub(r"\n{3,}", "\n\n", txt).strip()
+
+    @staticmethod
+    def _extract_attachments(payload: Dict) -> List[str]:
+        """
+        Extract attachment filenames from message payload.
+        Returns list of filenames.
+        """
+        attachments = []
+
+        def process_parts(parts):
+            for part in parts:
+                # Check if this part has a filename
+                filename = part.get("filename", "")
+                if filename:
+                    attachments.append(filename)
+
+                # Recursively process nested parts
+                if "parts" in part:
+                    process_parts(part["parts"])
+
+        # Check if payload has parts
+        if "parts" in payload:
+            process_parts(payload["parts"])
+
+        return attachments
 
     def authenticate(self):
         # Load existing token
@@ -144,6 +171,61 @@ class GmailClient:
             "date": headers.get("Date", "")
         }
 
+    def get_email_full_details(self, message_id: str) -> dict:
+        """
+        Fetch comprehensive email details including:
+        - message_id
+        - sender (From)
+        - subject
+        - datetime (formatted as YYYY.MM.DD HH:MM in Hungarian locale)
+        - attachment_count
+        - attachment_names (list of filenames)
+        """
+        if not self.service:
+            raise RuntimeError("Call authenticate() first.")
+
+        # Fetch full message
+        msg = self.service.users().messages().get(
+            userId="me",
+            id=message_id,
+            format="full"
+        ).execute()
+
+        # Extract headers
+        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+
+        # Get sender
+        sender = headers.get("From", "(unknown sender)")
+
+        # Get subject
+        subject = headers.get("Subject", "(no subject)")
+
+        # Get and format date
+        date_str = headers.get("Date", "")
+        formatted_datetime = "N/A"
+        if date_str:
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(date_str)
+                # Format as YYYY.MM.DD HH:MM
+                formatted_datetime = dt.strftime("%Y.%m.%d %H:%M")
+            except (ValueError, TypeError):
+                formatted_datetime = "N/A"
+
+        # Extract attachments
+        payload = msg.get("payload", {})
+        attachment_names = self._extract_attachments(payload)
+        attachment_count = len(attachment_names)
+
+        return {
+            "message_id": message_id,
+            "sender": sender,
+            "subject": subject,
+            "datetime": formatted_datetime,
+            "attachment_count": attachment_count,
+            "attachment_names": attachment_names
+        }
+
     def get_message(self, message_id: str) -> Dict:
         """
         Fetch full message payload if needed later.
@@ -160,12 +242,13 @@ class GmailClient:
         subject = headers.get("Subject", "(no subject)")
         text = self._extract_text_from_payload(full.get("payload", {})) or full.get("snippet", "")
         return {"subject": subject, "text": text}
-    #Jozsi
+
+    # Jozsi
     def create_label(self, name, label_list_visibility='labelShow', message_list_visibility='show'):
         label = {
-            'name' : name,
-            'labelListVisibility' : label_list_visibility,
-            'messageListVisibility' : message_list_visibility
+            'name': name,
+            'labelListVisibility': label_list_visibility,
+            'messageListVisibility': message_list_visibility
         }
         created_label = self.service.users().labels().create(userId='me', body=label).execute()
         return created_label
@@ -193,13 +276,21 @@ class GmailClient:
         label = next((label for label in labels if label['name'] == label_name), None)
         return label['id'] if label else None
 
-    #/Jozsi
+    # /Jozsi
+
+
 if __name__ == "__main__":
     try:
-        client = GmailClient(credentials_path="resource\credentials.json", token_path="resource/token.json")
+        client = GmailClient(credentials_path="resource\\credentials.json", token_path="resource/token.json")
         client.authenticate()
-        messages = client.list_inbox(query="", max_results=100)
+        messages = client.list_inbox(query="", max_results=5)
         for m in messages:
-            print(m["id"], client.get_subject(m["id"]))
+            details = client.get_email_full_details(m["id"])
+            print(f"\nMessage ID: {details['message_id']}")
+            print(f"From: {details['sender']}")
+            print(f"Subject: {details['subject']}")
+            print(f"DateTime: {details['datetime']}")
+            print(
+                f"Attachments ({details['attachment_count']}): {', '.join(details['attachment_names']) if details['attachment_names'] else 'None'}")
     except HttpError as e:
         print(f"Gmail API error: {e}")

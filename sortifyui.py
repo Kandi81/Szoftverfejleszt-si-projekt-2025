@@ -6,9 +6,8 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from googleapiclient.errors import HttpError
-from email.utils import parsedate_to_datetime
-from datetime import datetime
 import gmailclient
+from email_storage import EmailStorage
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -17,8 +16,9 @@ def resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller"""
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
+        # noinspection PyProtectedMember
+        base_path = sys._MEIPASS # type: ignore
+    except AttributeError:
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
@@ -37,10 +37,75 @@ categorized_counts = {
 }
 categorized_items = set()  # Track which items have been categorized
 gmail_client = None  # Gmail client instance
+email_storage = EmailStorage()  # Email storage instance
+email_data_map = {}  # Map tree item IDs to email data
+
+
+def load_offline_emails():
+    """Load emails from offline CSV storage and display in treeview"""
+    global all_items, email_data_map
+
+    # Load emails from CSV
+    emails = email_storage.load_emails()
+
+    # Clear existing rows
+    treeemails.delete(*treeemails.get_children())
+    all_items.clear()
+    email_data_map.clear()
+
+    if not emails:
+        # Show initial instruction message if no emails
+        treeemails.insert("", tk.END, values=("Az emailek letoltesehez kattintson a Letoltes/Frissites gombra", "", ""))
+        return
+
+    # Sort by datetime descending (newest first)
+    emails.sort(key=lambda x: x.get("datetime", ""), reverse=True)
+
+    # Insert emails into treeview
+    for email in emails:
+        subject = email.get("subject", "(no subject)")
+        tag = email.get("tag", "----")
+        datetime_str = email.get("datetime", "N/A")
+
+        item_id = treeemails.insert("", tk.END, values=(subject, tag, datetime_str))
+        all_items.append(item_id)
+        email_data_map[item_id] = email
+
+    # Update tag counts based on loaded emails
+    update_tag_counts_from_storage(emails)
+
+
+def update_tag_counts_from_storage(emails):
+    """Update tag button counts based on stored emails"""
+    global categorized_counts
+
+    # Reset counts
+    for tag in categorized_counts:
+        categorized_counts[tag] = 0
+
+    # Count tags
+    for email in emails:
+        tag = email.get("tag", "----")
+        if tag in categorized_counts:
+            categorized_counts[tag] += 1
+
+    # Update button displays
+    btntagvezetosegi.config(text=f"Vezetoseg ({categorized_counts['vezetoseg']})",
+                            state="normal" if categorized_counts['vezetoseg'] > 0 else "disabled")
+    btntagtanszek.config(text=f"Tanszék ({categorized_counts['tanszek']})",
+                         state="normal" if categorized_counts['tanszek'] > 0 else "disabled")
+    btntagneptun.config(text=f"Neptun ({categorized_counts['neptun']})",
+                        state="normal" if categorized_counts['neptun'] > 0 else "disabled")
+    btntagmoodle.config(text=f"Moodle ({categorized_counts['moodle']})",
+                        state="normal" if categorized_counts['moodle'] > 0 else "disabled")
+    btntagmilton.config(text=f"Milt-On ({categorized_counts['milt-on']})",
+                        state="normal" if categorized_counts['milt-on'] > 0 else "disabled")
+    btntaghianyos.config(text=f"Hiányos ({categorized_counts['hianyos']})",
+                         state="normal" if categorized_counts['hianyos'] > 0 else "disabled")
 
 
 def get_emails(_event):
-    global all_items, is_filtered, categorized_counts, categorized_items, gmail_client
+    global all_items, is_filtered, categorized_counts, categorized_items, gmail_client, email_data_map
 
     # Check if logged in
     if gmail_client is None:
@@ -55,54 +120,12 @@ def get_emails(_event):
         # Fetch emails from Gmail
         messages = gmail_client.list_inbox(query="", max_results=100)
 
-        # Clear existing rows and reset counts
-        treeemails.delete(*treeemails.get_children())
-        all_items.clear()
-        is_filtered = False
-        categorized_items.clear()
-
-        # Reset categorized counts
-        for tag in categorized_counts:
-            categorized_counts[tag] = 0
-
-        # Reset button texts to show (0)
-        btntagvezetosegi.config(text="Vezetoseg (0)", state="disabled")
-        btntagtanszek.config(text="Tanszék (0)", state="disabled")
-        btntagneptun.config(text="Neptun (0)", state="disabled")
-        btntagmoodle.config(text="Moodle (0)", state="disabled")
-        btntagmilton.config(text="Milt-On (0)", state="disabled")
-        btntaghianyos.config(text="Hiányos (0)", state="disabled")
-
-        # Configure columns
-        treeemails.config(columns=("Subject", "Tag", "Date"), show='headings')
-
-        # Set up column headings
-        treeemails.heading("Subject", text="Email")
-        treeemails.heading("Tag", text="Cimke")
-        treeemails.heading("Date", text="Dátum")
-
-        # Set up column properties
-        treeemails.column("Subject", anchor="w", width=500)
-        treeemails.column("Tag", anchor="w", width=100)
-        treeemails.column("Date", anchor="center", width=231)
-
-        # Fetch and insert emails
-        email_data = []
+        # Fetch full details for each email
+        gmail_emails = []
         for msg in messages:
             try:
-                msg_data = gmail_client.get_subject_and_date(msg["id"])
-                subject = msg_data["subject"]
-                date_str = msg_data["date"]
-
-                # Parse and format date
-                try:
-                    dt = parsedate_to_datetime(date_str)
-                    formatted_date = dt.strftime("%Y-%m-%d")
-                    email_data.append((subject, "----", formatted_date, dt))
-                except (ValueError, TypeError):
-                    formatted_date = "N/A"
-                    email_data.append((subject, "----", formatted_date, datetime.min))
-
+                email_details = gmail_client.get_email_full_details(msg["id"])
+                gmail_emails.append(email_details)
             except HttpError as e:
                 print(f"Error fetching message {msg['id']}: {e}")
                 continue
@@ -110,17 +133,37 @@ def get_emails(_event):
                 print(f"Unexpected error fetching message {msg['id']}: {e}")
                 continue
 
-        # Sort by date descending (newest first)
-        email_data.sort(key=lambda x: x[3], reverse=True)
+        # Sync with offline storage
+        synced_emails = email_storage.sync_emails(gmail_emails)
+
+        # Clear existing rows
+        treeemails.delete(*treeemails.get_children())
+        all_items.clear()
+        email_data_map.clear()
+        is_filtered = False
+        categorized_items.clear()
+
+        # Sort by datetime descending (newest first)
+        synced_emails.sort(key=lambda x: x.get("datetime", ""), reverse=True)
 
         # Insert rows into treeview
-        for subject, tag, formatted_date, _ in email_data:
-            item_id = treeemails.insert("", tk.END, values=(subject, tag, formatted_date))
+        for email in synced_emails:
+            subject = email.get("subject", "(no subject)")
+            tag = email.get("tag", "----")
+            datetime_str = email.get("datetime", "N/A")
+
+            item_id = treeemails.insert("", tk.END, values=(subject, tag, datetime_str))
             all_items.append(item_id)
+            email_data_map[item_id] = email
+
+        # Update tag counts
+        update_tag_counts_from_storage(synced_emails)
 
         # Enable the select all checkbox now that we have emails
-        if email_data:
+        if synced_emails:
             chkselectall.config(state="normal")
+
+        messagebox.showinfo("Siker", f"{len(gmail_emails)} email letöltve és szinkronizálva!")
 
     except HttpError as e:
         messagebox.showerror("Hiba", f"Gmail API hiba: {e}")
@@ -133,7 +176,7 @@ def get_emails(_event):
 
 def categorize_emails():
     """Count tags and update button text and state for selected items only"""
-    global categorized_counts, categorized_items
+    global categorized_counts, categorized_items, email_data_map
 
     # Show progress bar
     pbaremails.place(x=869, y=656, width=120, height=20)
@@ -165,40 +208,35 @@ def categorize_emails():
                 # Mark this item as categorized
                 categorized_items.add(item_id)
 
+                # Update tag in storage
+                if item_id in email_data_map:
+                    email = email_data_map[item_id]
+                    message_id = email.get("message_id")
+                    if message_id:
+                        email_storage.update_email_tag(message_id, tag)
+
     # Increment the cumulative counts
     for tag in categorized_counts:
         categorized_counts[tag] += current_counts[tag]
 
     # Update button texts and states using cumulative counts
-    # Vezetoseg button
-    count = categorized_counts["vezetoseg"]
-    btntagvezetosegi.config(text=f"Vezetoseg ({count})")
-    btntagvezetosegi.config(state="normal" if count >= 1 else "disabled")
+    btntagvezetosegi.config(text=f"Vezetoseg ({categorized_counts['vezetoseg']})")
+    btntagvezetosegi.config(state="normal" if categorized_counts['vezetoseg'] >= 1 else "disabled")
 
-    # Tanszek button
-    count = categorized_counts["tanszek"]
-    btntagtanszek.config(text=f"Tanszék ({count})")
-    btntagtanszek.config(state="normal" if count >= 1 else "disabled")
+    btntagtanszek.config(text=f"Tanszék ({categorized_counts['tanszek']})")
+    btntagtanszek.config(state="normal" if categorized_counts['tanszek'] >= 1 else "disabled")
 
-    # Neptun button
-    count = categorized_counts["neptun"]
-    btntagneptun.config(text=f"Neptun ({count})")
-    btntagneptun.config(state="normal" if count >= 1 else "disabled")
+    btntagneptun.config(text=f"Neptun ({categorized_counts['neptun']})")
+    btntagneptun.config(state="normal" if categorized_counts['neptun'] >= 1 else "disabled")
 
-    # Moodle button
-    count = categorized_counts["moodle"]
-    btntagmoodle.config(text=f"Moodle ({count})")
-    btntagmoodle.config(state="normal" if count >= 1 else "disabled")
+    btntagmoodle.config(text=f"Moodle ({categorized_counts['moodle']})")
+    btntagmoodle.config(state="normal" if categorized_counts['moodle'] >= 1 else "disabled")
 
-    # Milt-On button
-    count = categorized_counts["milt-on"]
-    btntagmilton.config(text=f"Milt-On ({count})")
-    btntagmilton.config(state="normal" if count >= 1 else "disabled")
+    btntagmilton.config(text=f"Milt-On ({categorized_counts['milt-on']})")
+    btntagmilton.config(state="normal" if categorized_counts['milt-on'] >= 1 else "disabled")
 
-    # Hianyos button
-    count = categorized_counts["hianyos"]
-    btntaghianyos.config(text=f"Hiányos ({count})")
-    btntaghianyos.config(state="normal" if count >= 1 else "disabled")
+    btntaghianyos.config(text=f"Hiányos ({categorized_counts['hianyos']})")
+    btntaghianyos.config(state="normal" if categorized_counts['hianyos'] >= 1 else "disabled")
 
     # Uncheck the select all checkbox and clear selection
     select_all_var.set(False)
@@ -302,7 +340,7 @@ def session_login():
     """Handle login/logout for Gmail"""
     global gmail_client
 
-    token_path = resource_path(os.path.join("resource", "token.json"))
+    token_path = str(resource_path(os.path.join("resource", "token.json")))
 
     # Check current state
     if btnsession.cget("text") == "Kijelentkezés":
@@ -316,7 +354,7 @@ def session_login():
     else:
         # Login
         try:
-            credentials_path = resource_path(os.path.join("resource", "credentials.json"))
+            credentials_path = str(resource_path(os.path.join("resource", "credentials.json")))
             gmail_client = gmailclient.GmailClient(
                 credentials_path=credentials_path,
                 token_path=token_path
@@ -341,12 +379,12 @@ def session_login():
 def check_initial_login_state():
     """Check if user is already logged in at startup"""
     global gmail_client
-    token_path = resource_path(os.path.join("resource", "token.json"))
+    token_path = str(resource_path(os.path.join("resource", "token.json")))
     if os.path.exists(token_path):
         btnsession.config(text="Kijelentkezés")
         # Automatically authenticate
         try:
-            credentials_path = resource_path(os.path.join("resource", "credentials.json"))
+            credentials_path = str(resource_path(os.path.join("resource", "credentials.json")))
             gmail_client = gmailclient.GmailClient(
                 credentials_path=credentials_path,
                 token_path=token_path
@@ -524,10 +562,10 @@ treeemails.column("Subject", anchor="w", width=700)
 treeemails.column("Tag", anchor="w", width=100)
 treeemails.column("Date", anchor="center", width=191)
 
-# Add initial instruction message
-treeemails.insert("", tk.END, values=("Az emailek letoltesehez kattintson a Letoltes/Frissites gombra", "", ""))
-
 # Check login state at startup
 check_initial_login_state()
+
+# Load offline emails on startup
+load_offline_emails()
 
 windowsortify.mainloop()
