@@ -519,7 +519,7 @@ def on_key_press(event):
 
 # Window and styles
 windowsortify = tk.Tk()
-windowsortify.title("Sortify v1.0")
+windowsortify.title("Sortify v0.3.0")  # Changed from v1.0
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1024x743")
 
