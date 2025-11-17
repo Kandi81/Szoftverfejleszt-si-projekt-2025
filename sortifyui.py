@@ -8,6 +8,7 @@ from email.utils import parseaddr
 import gmailclient
 from email_storage import EmailStorage
 from rules import apply_rules
+from attachment_verifier import verify_emails_batch
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -26,6 +27,7 @@ def resource_path(relative_path):
 all_items = []
 is_filtered = False
 attachment_filter_active = False
+current_filter_label = ""
 
 categorized_counts = {
     "vezetoseg": 0,
@@ -39,6 +41,10 @@ categorized_items = set()
 gmail_client = None
 email_storage = EmailStorage()
 email_data_map = {}
+
+# Sorting state
+sort_column = "Date"
+sort_reverse = True
 
 
 def populate_tree_from_emails(emails):
@@ -117,17 +123,31 @@ def get_emails(_event):
                             "Frissítés le van tiltva, hogy ne írjuk felül a teszt adatokat.")
         return
 
-    pbaremails.place(x=869, y=656, width=120, height=20)
+    # Initialize progress bar at 0%
+    pbaremails.config(value=0)
+    pbaremails.place(x=560, y=14, width=200, height=22)
     windowsortify.update()
 
     try:
+        # Step 1: Fetch message list (0-10% of progress)
         messages = gmail_client.list_inbox(query="", max_results=100)
+        pbaremails.config(value=10)
+        windowsortify.update()
 
         gmail_emails = []
         total = len(messages) if isinstance(messages, list) else 0
-        processed = 0
 
-        for msg in messages:
+        if total == 0:
+            pbaremails.config(value=100)
+            windowsortify.update()
+            messagebox.showinfo("Info", "Nincs új email a postaládában.")
+            pbaremails.place_forget()
+            return
+
+        # Step 2: Fetch email details (10-90% of progress)
+        detail_progress_range = 80
+
+        for idx, msg in enumerate(messages, start=1):
             try:
                 details = gmail_client.get_email_full_details(msg["id"])
                 name, addr = parseaddr(details.get("sender", ""))
@@ -143,16 +163,20 @@ def get_emails(_event):
                 print(f"Hiba az üzenet feldolgozásakor: {e}")
                 continue
             finally:
-                processed += 1
-                try:
-                    pct = 50 + int(50 * (processed / max(1, total)))
-                except Exception:
-                    pct = 50
-                pbaremails.config(value=pct)
+                progress = 10 + int((idx / total) * detail_progress_range)
+                pbaremails.config(value=progress)
                 windowsortify.update()
+
+        # Step 3: Apply rules (90-95% of progress)
+        pbaremails.config(value=90)
+        windowsortify.update()
 
         apply_rules(gmail_emails)
 
+        pbaremails.config(value=95)
+        windowsortify.update()
+
+        # Step 4: Sync with storage and display (95-100% of progress)
         synced_emails = email_storage.sync_emails(gmail_emails)
 
         is_filtered = False
@@ -166,7 +190,11 @@ def get_emails(_event):
         if synced_emails:
             chkselectall.config(state="normal")
 
+        pbaremails.config(value=100)
+        windowsortify.update()
+
         messagebox.showinfo("Siker", f"{len(synced_emails)} email letöltve és szinkronizálva!")
+
     except HttpError as e:
         messagebox.showerror("Hiba", f"Gmail API hiba: {e}")
     except Exception as e:
@@ -177,7 +205,7 @@ def get_emails(_event):
 
 def filter_by_tag(tag_name):
     """Filter treeview to show only items with the specified tag"""
-    global is_filtered
+    global is_filtered, current_filter_label
     for item_id in all_items:
         if treeemails.exists(item_id):
             try:
@@ -193,12 +221,14 @@ def filter_by_tag(tag_name):
                     treeemails.detach(item_id)
     treeemails.selection_remove(treeemails.get_children())
     is_filtered = True
+    current_filter_label = tag_name.capitalize()
+    filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
 
 
 def filter_by_attachment():
-    global is_filtered, attachment_filter_active
+    global is_filtered, attachment_filter_active, current_filter_label
     for item_id in all_items:
         if treeemails.exists(item_id):
             e = email_data_map.get(item_id, {})
@@ -212,13 +242,15 @@ def filter_by_attachment():
     treeemails.selection_remove(treeemails.get_children())
     is_filtered = True
     attachment_filter_active = True
+    current_filter_label = "Csatolmány"
+    filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
     btnattachcheck.config(state="normal")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
 
 
 def clear_filters():
-    global is_filtered, attachment_filter_active
+    global is_filtered, attachment_filter_active, current_filter_label
     for item_id in all_items:
         if treeemails.exists(item_id):
             try:
@@ -228,8 +260,98 @@ def clear_filters():
     treeemails.selection_remove(treeemails.get_children())
     is_filtered = False
     attachment_filter_active = False
+    current_filter_label = ""
+    filter_status_label.config(text="")
     btnattachcheck.config(state="disabled")
     btnclearfilters.place_forget()
+
+
+def verify_attachments():
+    """Verify attachments for filtered emails"""
+    # Get all visible (filtered) emails
+    filtered_emails = []
+    for item_id in treeemails.get_children():
+        if item_id in email_data_map:
+            filtered_emails.append(email_data_map[item_id])
+
+    if not filtered_emails:
+        messagebox.showinfo("Info", "Nincs szűrt email csatolmánnyal.")
+        return
+
+    # Run verification
+    results = verify_emails_batch(filtered_emails)
+
+    # Display results
+    total = results['total_attachments']
+    suspicious = results['suspicious_count']
+
+    if suspicious == 0:
+        messagebox.showinfo("Ellenőrzés kész",
+                            f"Ellenőrzött csatolmányok: {total}\n"
+                            f"Gyanús fájlok: 0\n\n"
+                            f"Minden csatolmány rendben van! ✓")
+    else:
+        # Build detailed message
+        msg = f"Ellenőrzött csatolmányok: {total}\nGyanús fájlok: {suspicious}\n\n"
+        msg += "GYANÚS EMAILEK:\n" + "=" * 50 + "\n\n"
+
+        for idx, email_data in enumerate(results['suspicious_emails'], start=1):
+            msg += f"{idx}. {email_data['subject'][:50]}\n"
+            msg += f"   Feladó: {email_data['sender_name']}\n"
+            msg += f"   Dátum: {email_data['datetime']}\n"
+
+            for att in email_data['suspicious_attachments']:
+                msg += f"   ⚠️  {att['filename']}\n"
+                msg += f"      {att['reason']}\n"
+            msg += "\n"
+
+        messagebox.showwarning("FIGYELEM - Gyanús csatolmányok", msg)
+
+
+def sort_tree_by_column(col_name):
+    """Sort TreeView by column, toggle ascending/descending"""
+    global sort_column, sort_reverse
+
+    if sort_column == col_name:
+        sort_reverse = not sort_reverse
+    else:
+        sort_column = col_name
+        sort_reverse = False
+
+    items = []
+    for item_id in treeemails.get_children():
+        if item_id in email_data_map:
+            e = email_data_map[item_id]
+            items.append((item_id, e))
+
+    if col_name == "Sender":
+        items.sort(key=lambda x: x[1].get("sender_name", "").lower(), reverse=sort_reverse)
+    elif col_name == "Subject":
+        items.sort(key=lambda x: x[1].get("subject", "").lower(), reverse=sort_reverse)
+    elif col_name == "Tag":
+        items.sort(key=lambda x: x[1].get("tag", "").lower(), reverse=sort_reverse)
+    elif col_name == "Attach":
+        items.sort(key=lambda x: int(x[1].get("attachment_count", 0)), reverse=sort_reverse)
+    elif col_name == "Date":
+        items.sort(key=lambda x: x[1].get("datetime", ""), reverse=sort_reverse)
+
+    for idx, (item_id, _) in enumerate(items):
+        treeemails.move(item_id, "", idx)
+
+    for col in ["Sender", "Subject", "Tag", "Attach", "Date"]:
+        header_text = {
+            "Sender": "Feladó",
+            "Subject": "Email",
+            "Tag": "Cimke",
+            "Attach": attach_header,
+            "Date": "Dátum"
+        }[col]
+
+        if col == col_name:
+            arrow = " ▼" if sort_reverse else " ▲"
+            treeemails.heading(col, text=header_text + arrow)
+        else:
+            treeemails.heading(col, text=header_text)
 
 
 def select_all():
@@ -314,6 +436,18 @@ def check_initial_login_state():
     update_get_emails_button_state()
 
 
+def on_key_press(event):
+    """Handle keyboard shortcuts"""
+    # Ctrl+R: Refresh
+    if event.state == 4 and event.keysym.lower() == 'r':
+        if gmail_client and not email_storage.is_test_mode():
+            get_emails(None)
+    # Escape: Clear filters
+    elif event.keysym == 'Escape':
+        if is_filtered:
+            clear_filters()
+
+
 # Window and styles
 windowsortify = tk.Tk()
 windowsortify.title("Sortify v1.0")
@@ -360,9 +494,9 @@ style.configure("btnattachcheck.TButton", background="#E4E2E2", foreground="#000
 style.map("btnattachcheck.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
 
-btnattachcheck = ttk.Button(master=frameactionbar, text="Csatolmányok ellenőrzése", style="btnattachcheck.TButton",
-                            command=lambda: messagebox.showinfo("Info",
-                                                                "Ellenőrző folyamat később kerül implementálásra."),
+btnattachcheck = ttk.Button(master=frameactionbar, text="Csatolmányok ellenőrzése",
+                            style="btnattachcheck.TButton",
+                            command=verify_attachments,
                             state="disabled")
 btnattachcheck.place(x=280, y=9, width=190, height=40)
 
@@ -417,9 +551,14 @@ btnattachfilter = ttk.Button(master=framemain, text="Csatolmány (0)", style="bt
 btnattachfilter.place(x=789, y=636, width=120, height=40)
 
 # Progress bar
-style.configure("pbaremails.Horizontal.TProgressbar", background="#bab6ab", troughcolor="#dcdad6")
-pbaremails = ttk.Progressbar(master=framemain, style="pbaremails.Horizontal.TProgressbar", value=50)
-pbaremails.config(orient="horizontal", mode="determinate", length=100)
+style.configure("pbaremails.Horizontal.TProgressbar",
+                background="#90EE90",
+                troughcolor="#E4E2E2")
+
+pbaremails = ttk.Progressbar(master=frameactionbar,
+                             style="pbaremails.Horizontal.TProgressbar",
+                             value=0)
+pbaremails.config(orient="horizontal", mode="determinate", length=200)
 
 # Tree styles and widget
 style.configure("treeemails.Treeview.Heading", background="#E0E0E0", foreground="#000000")
@@ -437,11 +576,11 @@ try:
 except Exception:
     attach_header = "Att."
 
-treeemails.heading("Sender", text="Feladó")
-treeemails.heading("Subject", text="Email")
-treeemails.heading("Tag", text="Cimke")
-treeemails.heading("Attach", text=attach_header)
-treeemails.heading("Date", text="Dátum")
+treeemails.heading("Sender", text="Feladó", command=lambda: sort_tree_by_column("Sender"))
+treeemails.heading("Subject", text="Email", command=lambda: sort_tree_by_column("Subject"))
+treeemails.heading("Tag", text="Cimke", command=lambda: sort_tree_by_column("Tag"))
+treeemails.heading("Attach", text=attach_header, command=lambda: sort_tree_by_column("Attach"))
+treeemails.heading("Date", text="Dátum", command=lambda: sort_tree_by_column("Date"))
 
 treeemails.column("Sender", anchor="w", width=180)
 treeemails.column("Subject", anchor="w", width=420)
@@ -458,6 +597,18 @@ chkselectall = ttk.Checkbutton(master=frameactionbar, text="Mind",
                                command=select_all,
                                state="disabled")
 chkselectall.place(x=480, y=14, width=70, height=30)
+
+# Filter status label
+filter_status_label = tk.Label(master=frameactionbar,
+                               text="",
+                               bg="#EDECEC",
+                               fg="#555555",
+                               font=("", 9, "italic"),
+                               anchor="w")
+filter_status_label.place(x=770, y=14, width=130, height=30)
+
+# Keyboard shortcuts
+windowsortify.bind("<Key>", on_key_press)
 
 # Initial state
 check_initial_login_state()
