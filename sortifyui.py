@@ -228,9 +228,8 @@ def filter_by_tag(tag_name):
     current_filter_label = tag_name.capitalize()
     filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
-    btnattachcheck.config(state="disabled")  # NEW: Disable attachment check when filtering by tag
+    btnattachcheck.config(state="disabled")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
-
 
 
 def filter_by_attachment():
@@ -268,7 +267,7 @@ def clear_filters():
     attachment_filter_active = False
     current_filter_label = ""
     filter_status_label.config(text="")
-    btnattachcheck.config(state="disabled")  # Already here, good!
+    btnattachcheck.config(state="disabled")
     btnclearfilters.place_forget()
 
 
@@ -442,6 +441,12 @@ def check_selection(_event=None):
         btncategorize.config(state="disabled")
 
 
+def open_settings():
+    """Open settings window"""
+    from settings_ui import SettingsWindow
+    SettingsWindow(windowsortify)
+
+
 def update_get_emails_button_state():
     if gmail_client is not None and not email_storage.is_test_mode():
         btngetmails.config(state="normal")
@@ -564,6 +569,16 @@ btnattachcheck = ttk.Button(master=frameactionbar, text="Csatolmányok ellenőrz
                             state="disabled")
 btnattachcheck.place(x=280, y=9, width=190, height=40)
 
+# Settings button - gear icon
+style.configure("btnsettings.TButton", background="#E4E2E2", foreground="#000", font=("", 14))
+style.map("btnsettings.TButton", background=[("active", "#E4E2E2")],
+          foreground=[("active", "#000")])
+
+btnsettings = ttk.Button(master=frameactionbar, text="⚙", style="btnsettings.TButton",
+                         command=open_settings)
+btnsettings.place(x=865, y=9, width=40, height=40)  # Moved to x=843 with safe spacing
+
+# Login/Logout button
 style.configure("btnsession.TButton", background="#E4E2E2", foreground="#000")
 style.map("btnsession.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
@@ -669,7 +684,7 @@ filter_status_label = tk.Label(master=frameactionbar,
                                fg="#555555",
                                font=("", 9, "italic"),
                                anchor="w")
-filter_status_label.place(x=770, y=14, width=130, height=30)
+filter_status_label.place(x=770, y=14, width=95, height=30)
 
 # Keyboard shortcuts
 windowsortify.bind("<Key>", on_key_press)
