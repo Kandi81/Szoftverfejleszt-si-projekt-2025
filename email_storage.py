@@ -1,6 +1,6 @@
 """
-Email storage module for managing offline email data in CSV format.
-Handles saving, loading, and syncing email data.
+Email storage for offline email data (CSV, non-backward compatible).
+Supports normal mode (emails.csv) and test mode (emails_mod.csv).
 """
 
 import csv
@@ -8,216 +8,148 @@ import os
 from typing import List, Dict, Optional
 
 
+CSV_FIELDS = [
+    "message_id",
+    "sender",          # raw "From" header
+    "sender_name",     # parsed display name only
+    "sender_domain",   # domain part of email
+    "subject",
+    "datetime",        # YYYY.MM.DD HH:MM
+    "attachment_count",
+    "attachment_names",  # semicolon-separated
+    "mime_types",        # semicolon-separated
+    "tag",
+    "is_last_downloaded",
+    "needs_more_info",   # student triage flag (0/1)
+    "rule_applied"       # e.g., vezetosegi/tanszek/...
+]
+
+
 class EmailStorage:
+    """
+    Storage facade. If emails_mod.csv exists, storage operates in test mode:
+    - Loads from emails_mod.csv
+    - Does NOT write back to emails_mod.csv (read-only test dataset)
+    - Writes normal sync results to emails.csv as usual
+    """
+
     def __init__(self, data_dir: str = "data"):
-        """
-        Initialize email storage.
-
-        Args:
-            data_dir: Directory where emails.csv will be stored (default: 'data')
-        """
         self.data_dir = data_dir
-        self.csv_path = os.path.join(data_dir, "emails.csv")
-        self._ensure_data_dir()
-
-    def _ensure_data_dir(self):
-        """Create data directory if it doesn't exist."""
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
 
-    def save_emails(self, emails: List[Dict]) -> None:
-        """
-        Save emails to CSV file.
+        self.csv_path = os.path.join(data_dir, "emails.csv")
+        self.test_csv_path = os.path.join(data_dir, "emails_mod.csv")
 
-        Args:
-            emails: List of email dictionaries with keys:
-                   message_id, sender, subject, datetime,
-                   attachment_count, attachment_names, tag, is_last_downloaded
-        """
-        fieldnames = [
-            "message_id", "sender", "subject", "datetime",
-            "attachment_count", "attachment_names", "tag", "is_last_downloaded"
-        ]
+    # -------- mode helpers --------
 
-        with open(self.csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
-            writer.writeheader()
+    def is_test_mode(self) -> bool:
+        """Return True if test dataset emails_mod.csv is present."""
+        return os.path.exists(self.test_csv_path)
 
-            for email_item in emails:
-                # Convert attachment_names list to semicolon-separated string
-                if isinstance(email_item.get("attachment_names"), list):
-                    email_item["attachment_names"] = ";".join(email_item["attachment_names"])
+    # -------- load/save helpers --------
 
-                writer.writerow(email_item)
+    def _load_from_path(self, path: str) -> List[Dict]:
+        if not os.path.exists(path):
+            return []
+        out: List[Dict] = []
+        with open(path, "r", newline="", encoding="utf-8") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                item = {k: row.get(k, "") for k in CSV_FIELDS}
+                item["attachment_names"] = item["attachment_names"].split(";") if item["attachment_names"] else []
+                item["mime_types"] = item["mime_types"].split(";") if item["mime_types"] else []
+                try:
+                    item["attachment_count"] = int(item["attachment_count"] or 0)
+                except ValueError:
+                    item["attachment_count"] = 0
+                for k in ("is_last_downloaded", "needs_more_info"):
+                    try:
+                        item[k] = int(item[k] or 0)
+                    except ValueError:
+                        item[k] = 0
+                out.append(item)
+        return out
+
+    def _save_to_path(self, path: str, emails: List[Dict]) -> None:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=CSV_FIELDS, quoting=csv.QUOTE_MINIMAL)
+            w.writeheader()
+            for e in emails:
+                row = {k: "" for k in CSV_FIELDS}
+                row.update(e)
+                if isinstance(row.get("attachment_names"), list):
+                    row["attachment_names"] = ";".join(row["attachment_names"])
+                if isinstance(row.get("mime_types"), list):
+                    row["mime_types"] = ";".join(row["mime_types"])
+                row["attachment_count"] = int(row.get("attachment_count", 0))
+                row["is_last_downloaded"] = int(row.get("is_last_downloaded", 0))
+                row["needs_more_info"] = int(row.get("needs_more_info", 0))
+                w.writerow(row)
+
+    # -------- public API --------
 
     def load_emails(self) -> List[Dict]:
         """
-        Load emails from CSV file.
-
-        Returns:
-            List of email dictionaries. Returns empty list if file doesn't exist.
+        Load emails.
+        - In test mode: load emails_mod.csv (read-only test dataset).
+        - Otherwise: load emails.csv.
         """
-        if not os.path.exists(self.csv_path):
-            return []
+        if self.is_test_mode():
+            return self._load_from_path(self.test_csv_path)
+        return self._load_from_path(self.csv_path)
 
-        email_list = []
-        with open(self.csv_path, 'r', newline='', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                # Convert attachment_names back to list
-                if row.get("attachment_names"):
-                    row["attachment_names"] = row["attachment_names"].split(";")
-                else:
-                    row["attachment_names"] = []
-
-                # Convert attachment_count to int
-                try:
-                    row["attachment_count"] = int(row.get("attachment_count", 0))
-                except (ValueError, TypeError):
-                    row["attachment_count"] = 0
-
-                # Convert is_last_downloaded to int (0 or 1)
-                try:
-                    row["is_last_downloaded"] = int(row.get("is_last_downloaded", 0))
-                except (ValueError, TypeError):
-                    row["is_last_downloaded"] = 0
-
-                email_list.append(row)
-
-        return email_list
+    def save_emails(self, emails: List[Dict]) -> None:
+        """
+        Save emails.
+        - NEVER overwrite emails_mod.csv (test dataset is read-only).
+        - Always write to emails.csv.
+        """
+        self._save_to_path(self.csv_path, emails)
 
     def sync_emails(self, gmail_emails: List[Dict]) -> List[Dict]:
         """
-        Sync downloaded Gmail emails with existing offline storage.
-
-        Args:
-            gmail_emails: List of email dicts from Gmail API
-
-        Returns:
-            Merged and synced list of emails
+        Merge Gmail emails into local storage.
+        - Preserves existing tags from emails.csv (NOT from emails_mod.csv).
+        - Writes merged set to emails.csv.
+        - In test mode, this does NOT affect what the UI displays by default.
         """
-        # Load existing emails
-        existing_emails = self.load_emails()
+        # Always merge against the real storage CSV, not test dataset.
+        existing = self._load_from_path(self.csv_path)
+        existing_map = {e["message_id"]: e for e in existing}
 
-        # Create a map of existing emails by message_id
-        existing_map = {item["message_id"]: item for item in existing_emails}
+        merged: List[Dict] = []
+        for g in gmail_emails:
+            msg_id = g["message_id"]
+            g["tag"] = existing_map.get(msg_id, {}).get("tag", "----")
+            g["is_last_downloaded"] = 1
+            g.setdefault("needs_more_info", 0)
+            g.setdefault("rule_applied", "")
+            for k in CSV_FIELDS:
+                g.setdefault(
+                    k,
+                    "" if k not in ("attachment_count", "is_last_downloaded", "needs_more_info") else 0,
+                )
+            merged.append(g)
 
-        # Create a set of Gmail message IDs
-        gmail_ids = {item["message_id"] for item in gmail_emails}
-
-        # Clear all is_last_downloaded flags
-        for existing_item in existing_emails:
-            existing_item["is_last_downloaded"] = 0
-
-        # Process Gmail emails
-        synced_emails = []
-        for gmail_item in gmail_emails:
-            msg_id = gmail_item["message_id"]
-
-            if msg_id in existing_map:
-                # Email exists - preserve tag, update other fields
-                existing_item = existing_map[msg_id]
-                gmail_item["tag"] = existing_item.get("tag", "----")
-            else:
-                # New email - set default tag
-                gmail_item["tag"] = "----"
-
-            # Mark as part of last download
-            gmail_item["is_last_downloaded"] = 1
-
-            # Convert attachment_names to list if it's a string
-            if isinstance(gmail_item.get("attachment_names"), str):
-                gmail_item["attachment_names"] = gmail_item["attachment_names"].split(";")
-
-            synced_emails.append(gmail_item)
-
-        # Add existing emails that are still in Gmail (not in current batch but weren't deleted)
-        for existing_item in existing_emails:
-            msg_id = existing_item["message_id"]
-            if msg_id not in gmail_ids and msg_id not in [e["message_id"] for e in synced_emails]:
-                # Keep old emails that weren't in this download batch
-                synced_emails.append(existing_item)
-
-        # Save synced emails
-        self.save_emails(synced_emails)
-
-        return synced_emails
+        self.save_emails(merged)
+        return merged
 
     def update_email_tag(self, message_id: str, tag: str) -> bool:
-        """
-        Update the tag for a specific email.
-
-        Args:
-            message_id: The message ID to update
-            tag: New tag value
-
-        Returns:
-            True if successful, False if message not found
-        """
-        email_list = self.load_emails()
-        updated = False
-
-        for email_item in email_list:
-            if email_item["message_id"] == message_id:
-                email_item["tag"] = tag
-                updated = True
+        emails = self.load_emails()
+        ok = False
+        for e in emails:
+            if e["message_id"] == message_id:
+                e["tag"] = tag
+                ok = True
                 break
-
-        if updated:
-            self.save_emails(email_list)
-
-        return updated
+        if ok and not self.is_test_mode():
+            # Only persist tag changes in real mode
+            self.save_emails(emails)
+        return ok
 
     def get_email_by_id(self, message_id: str) -> Optional[Dict]:
-        """
-        Get a specific email by message ID.
-
-        Args:
-            message_id: The message ID to find
-
-        Returns:
-            Email dict if found, None otherwise
-        """
-        email_list = self.load_emails()
-        for email_item in email_list:
-            if email_item["message_id"] == message_id:
-                return email_item
+        for e in self.load_emails():
+            if e["message_id"] == message_id:
+                return e
         return None
-
-
-# Example usage
-if __name__ == "__main__":
-    storage = EmailStorage()
-
-    # Example: Save some test emails
-    test_emails = [
-        {
-            "message_id": "12345",
-            "sender": "test@example.com",
-            "subject": "Test Email 1",
-            "datetime": "2025.11.16 18:00",
-            "attachment_count": 2,
-            "attachment_names": ["document.pdf", "image.png"],
-            "tag": "----",
-            "is_last_downloaded": 1
-        },
-        {
-            "message_id": "67890",
-            "sender": "another@example.com",
-            "subject": "Test Email 2, with comma",
-            "datetime": "2025.11.16 17:30",
-            "attachment_count": 0,
-            "attachment_names": [],
-            "tag": "moodle",
-            "is_last_downloaded": 1
-        }
-    ]
-
-    storage.save_emails(test_emails)
-    print("Emails saved!")
-
-    # Load emails
-    loaded = storage.load_emails()
-    print(f"\nLoaded {len(loaded)} emails:")
-    for email_data in loaded:
-        print(f"  - {email_data['subject']} (Tag: {email_data['tag']}, Attachments: {email_data['attachment_count']})")
