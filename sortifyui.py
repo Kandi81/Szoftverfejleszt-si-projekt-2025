@@ -109,6 +109,10 @@ def load_offline_emails():
     update_tag_counts_from_storage(emails)
     update_attachment_button_count(emails)
 
+    # Enable "Mind" checkbox if emails exist (even in test mode)
+    if emails:
+        chkselectall.config(state="normal")
+
 
 def get_emails(_event):
     global is_filtered, categorized_items, attachment_filter_active
@@ -224,7 +228,9 @@ def filter_by_tag(tag_name):
     current_filter_label = tag_name.capitalize()
     filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
+    btnattachcheck.config(state="disabled")  # NEW: Disable attachment check when filtering by tag
     btnclearfilters.place(x=919, y=636, width=80, height=40)
+
 
 
 def filter_by_attachment():
@@ -262,7 +268,7 @@ def clear_filters():
     attachment_filter_active = False
     current_filter_label = ""
     filter_status_label.config(text="")
-    btnattachcheck.config(state="disabled")
+    btnattachcheck.config(state="disabled")  # Already here, good!
     btnclearfilters.place_forget()
 
 
@@ -306,6 +312,68 @@ def verify_attachments():
             msg += "\n"
 
         messagebox.showwarning("FIGYELEM - Gyanús csatolmányok", msg)
+
+
+def categorize_emails():
+    """Re-apply categorization rules to selected uncategorized emails"""
+    # Get selected items
+    selected_items = treeemails.selection()
+
+    if not selected_items:
+        messagebox.showinfo("Info",
+                            "Nincs kiválasztott email.\n\nVálasszon ki egy vagy több emailt a kategorizáláshoz.")
+        return
+
+    # Filter to only uncategorized emails
+    uncategorized_emails = []
+    for item_id in selected_items:
+        if item_id in email_data_map:
+            email_data = email_data_map[item_id]
+            if email_data.get("tag", "----") == "----":
+                uncategorized_emails.append(email_data)
+
+    if not uncategorized_emails:
+        messagebox.showinfo("Info",
+                            f"A kiválasztott {len(selected_items)} email már kategorizálva van.\n\n"
+                            f"Csak a '----' címkével rendelkező emailek lesznek újra kategorizálva.")
+        return
+
+    # Apply rules
+    apply_rules(uncategorized_emails)
+
+    # Count how many were categorized
+    newly_categorized = sum(1 for email in uncategorized_emails if email.get("tag", "----") != "----")
+
+    if newly_categorized == 0:
+        messagebox.showinfo("Info",
+                            f"A kiválasztott {len(uncategorized_emails)} email nem illeszkedik egyik szabályhoz sem.\n\n"
+                            f"Ellenőrizze a config/settings.ini fájlt, vagy adja hozzá az emaileket a megfelelő szabályokhoz.")
+        return
+
+    # Save changes to storage
+    all_emails = email_storage.load_emails()
+
+    # Update the emails in the full list
+    email_id_map = {e.get("message_id"): e for e in all_emails}
+    for updated_email in uncategorized_emails:
+        msg_id = updated_email.get("message_id")
+        if msg_id in email_id_map:
+            email_id_map[msg_id].update(updated_email)
+
+    # Save back to storage
+    email_storage.save_emails(all_emails)
+
+    # Refresh UI
+    populate_tree_from_emails(all_emails)
+    update_tag_counts_from_storage(all_emails)
+
+    # Show success message
+    messagebox.showinfo("Siker",
+                        f"Kategorizálva: {newly_categorized}/{len(uncategorized_emails)} email\n\n"
+                        f"{'Az új címkék mentésre kerültek.' if not email_storage.is_test_mode() else 'Teszt mód - változások nem mentve.'}")
+
+    # Clear selection after categorization
+    treeemails.selection_remove(treeemails.get_children())
 
 
 def sort_tree_by_column(col_name):
@@ -372,10 +440,6 @@ def check_selection(_event=None):
         btncategorize.config(state="normal")
     else:
         btncategorize.config(state="disabled")
-
-
-def categorize_emails():
-    messagebox.showinfo("Info", "Kategorizálás funkció később kerül finomításra.")
 
 
 def update_get_emails_button_state():

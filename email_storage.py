@@ -1,155 +1,193 @@
-"""
-Email storage for offline email data (CSV, non-backward compatible).
-Supports normal mode (emails.csv) and test mode (emails_mod.csv).
-"""
-
 import csv
 import os
-from typing import List, Dict, Optional
-
-
-CSV_FIELDS = [
-    "message_id",
-    "sender",          # raw "From" header
-    "sender_name",     # parsed display name only
-    "sender_domain",   # domain part of email
-    "subject",
-    "datetime",        # YYYY.MM.DD HH:MM
-    "attachment_count",
-    "attachment_names",  # semicolon-separated
-    "mime_types",        # semicolon-separated
-    "tag",
-    "is_last_downloaded",
-    "needs_more_info",   # student triage flag (0/1)
-    "rule_applied"       # e.g., vezetosegi/tanszek/...
-]
+from typing import List, Dict
 
 
 class EmailStorage:
-    """
-    Storage facade. If emails_mod.csv exists, storage operates in test mode:
-    - Loads from emails_mod.csv
-    - Does NOT write back to emails_mod.csv (read-only test dataset)
-    - Writes normal sync results to emails.csv as usual
-    """
+    def __init__(self, csv_path: str = "data/emails.csv"):
+        self.default_csv_path = csv_path
+        self.test_csv_path = "data/emails_mod.csv"
 
-    def __init__(self, data_dir: str = "data"):
-        self.data_dir = data_dir
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
+        # Ensure data directory exists
+        os.makedirs("data", exist_ok=True)
 
-        self.csv_path = os.path.join(data_dir, "emails.csv")
-        self.test_csv_path = os.path.join(data_dir, "emails_mod.csv")
+        self._update_mode()
 
-    # -------- mode helpers --------
+    def _update_mode(self):
+        """Check and update test mode status"""
+        if os.path.exists(self.test_csv_path):
+            self.test_mode = True
+            self.csv_path = self.test_csv_path
+            print(f"[STORAGE] Test mode detected - using {self.csv_path}")
+        else:
+            self.test_mode = False
+            self.csv_path = self.default_csv_path
+            print(f"[STORAGE] Production mode - using {self.csv_path}")
 
     def is_test_mode(self) -> bool:
-        """Return True if test dataset emails_mod.csv is present."""
-        return os.path.exists(self.test_csv_path)
-
-    # -------- load/save helpers --------
-
-    def _load_from_path(self, path: str) -> List[Dict]:
-        if not os.path.exists(path):
-            return []
-        out: List[Dict] = []
-        with open(path, "r", newline="", encoding="utf-8") as f:
-            r = csv.DictReader(f)
-            for row in r:
-                item = {k: row.get(k, "") for k in CSV_FIELDS}
-                item["attachment_names"] = item["attachment_names"].split(";") if item["attachment_names"] else []
-                item["mime_types"] = item["mime_types"].split(";") if item["mime_types"] else []
-                try:
-                    item["attachment_count"] = int(item["attachment_count"] or 0)
-                except ValueError:
-                    item["attachment_count"] = 0
-                for k in ("is_last_downloaded", "needs_more_info"):
-                    try:
-                        item[k] = int(item[k] or 0)
-                    except ValueError:
-                        item[k] = 0
-                out.append(item)
-        return out
-
-    def _save_to_path(self, path: str, emails: List[Dict]) -> None:
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS, quoting=csv.QUOTE_MINIMAL)
-            w.writeheader()
-            for e in emails:
-                row = {k: "" for k in CSV_FIELDS}
-                row.update(e)
-                if isinstance(row.get("attachment_names"), list):
-                    row["attachment_names"] = ";".join(row["attachment_names"])
-                if isinstance(row.get("mime_types"), list):
-                    row["mime_types"] = ";".join(row["mime_types"])
-                row["attachment_count"] = int(row.get("attachment_count", 0))
-                row["is_last_downloaded"] = int(row.get("is_last_downloaded", 0))
-                row["needs_more_info"] = int(row.get("needs_more_info", 0))
-                w.writerow(row)
-
-    # -------- public API --------
+        """Check if running in test mode (emails_mod.csv exists)"""
+        # Re-check in case file was created/deleted
+        self._update_mode()
+        return self.test_mode
 
     def load_emails(self) -> List[Dict]:
-        """
-        Load emails.
-        - In test mode: load emails_mod.csv (read-only test dataset).
-        - Otherwise: load emails.csv.
-        """
-        if self.is_test_mode():
-            return self._load_from_path(self.test_csv_path)
-        return self._load_from_path(self.csv_path)
+        """Load emails from CSV file"""
+        # Update mode before loading
+        self._update_mode()
 
-    def save_emails(self, emails: List[Dict]) -> None:
-        """
-        Save emails.
-        - NEVER overwrite emails_mod.csv (test dataset is read-only).
-        - Always write to emails.csv.
-        """
-        self._save_to_path(self.csv_path, emails)
+        if not os.path.exists(self.csv_path):
+            print(f"[STORAGE] CSV file not found: {self.csv_path}")
+            return []
+
+        emails = []
+        try:
+            with open(self.csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Safely convert numeric fields with defaults
+                    try:
+                        row['attachment_count'] = int(row.get('attachment_count', 0) or 0)
+                    except (ValueError, TypeError):
+                        row['attachment_count'] = 0
+
+                    try:
+                        row['is_last_downloaded'] = int(row.get('is_last_downloaded', 0) or 0)
+                    except (ValueError, TypeError):
+                        row['is_last_downloaded'] = 0
+
+                    try:
+                        row['needs_more_info'] = int(row.get('needs_more_info', 0) or 0)
+                    except (ValueError, TypeError):
+                        row['needs_more_info'] = 0
+
+                    # Parse lists from strings (support both ; and | separators)
+                    if row.get('attachment_names'):
+                        # Try semicolon first (your format), then pipe (our format)
+                        if ';' in row['attachment_names']:
+                            row['attachment_names'] = [name.strip() for name in row['attachment_names'].split(';') if
+                                                       name.strip()]
+                        elif '|' in row['attachment_names']:
+                            row['attachment_names'] = [name.strip() for name in row['attachment_names'].split('|') if
+                                                       name.strip()]
+                        else:
+                            row['attachment_names'] = [row['attachment_names']] if row['attachment_names'] else []
+                    else:
+                        row['attachment_names'] = []
+
+                    if row.get('mime_types'):
+                        # Try semicolon first (your format), then pipe (our format)
+                        if ';' in row['mime_types']:
+                            row['mime_types'] = [mt.strip() for mt in row['mime_types'].split(';') if mt.strip()]
+                        elif '|' in row['mime_types']:
+                            row['mime_types'] = [mt.strip() for mt in row['mime_types'].split('|') if mt.strip()]
+                        else:
+                            row['mime_types'] = [row['mime_types']] if row['mime_types'] else []
+                    else:
+                        row['mime_types'] = []
+
+                    # Ensure required fields exist
+                    row.setdefault('message_id', '')
+                    row.setdefault('sender', '')
+                    row.setdefault('sender_name', '')
+                    row.setdefault('sender_domain', '')
+                    row.setdefault('subject', '')
+                    row.setdefault('datetime', '')
+                    row.setdefault('tag', '----')
+                    row.setdefault('rule_applied', '')
+
+                    emails.append(row)
+
+            print(f"[STORAGE] Loaded {len(emails)} emails from {self.csv_path}")
+        except Exception as e:
+            print(f"[STORAGE] Error loading emails: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+        return emails
 
     def sync_emails(self, gmail_emails: List[Dict]) -> List[Dict]:
         """
-        Merge Gmail emails into local storage.
-        - Preserves existing tags from emails.csv (NOT from emails_mod.csv).
-        - Writes merged set to emails.csv.
-        - In test mode, this does NOT affect what the UI displays by default.
+        Sync Gmail emails with local storage.
+        - Marks all existing emails as not last downloaded
+        - Adds new emails from Gmail
+        - Updates existing emails if they've changed
+        - Returns the complete updated list
         """
-        # Always merge against the real storage CSV, not test dataset.
-        existing = self._load_from_path(self.csv_path)
-        existing_map = {e["message_id"]: e for e in existing}
+        existing_emails = self.load_emails()
+        existing_map = {e['message_id']: e for e in existing_emails}
 
-        merged: List[Dict] = []
-        for g in gmail_emails:
-            msg_id = g["message_id"]
-            g["tag"] = existing_map.get(msg_id, {}).get("tag", "----")
-            g["is_last_downloaded"] = 1
-            g.setdefault("needs_more_info", 0)
-            g.setdefault("rule_applied", "")
-            for k in CSV_FIELDS:
-                g.setdefault(
-                    k,
-                    "" if k not in ("attachment_count", "is_last_downloaded", "needs_more_info") else 0,
-                )
-            merged.append(g)
+        # Mark all as not last downloaded
+        for email in existing_emails:
+            email['is_last_downloaded'] = 0
 
-        self.save_emails(merged)
-        return merged
+        # Process Gmail emails
+        for gmail_email in gmail_emails:
+            gmail_email['is_last_downloaded'] = 1
+            message_id = gmail_email['message_id']
 
-    def update_email_tag(self, message_id: str, tag: str) -> bool:
-        emails = self.load_emails()
-        ok = False
-        for e in emails:
-            if e["message_id"] == message_id:
-                e["tag"] = tag
-                ok = True
-                break
-        if ok and not self.is_test_mode():
-            # Only persist tag changes in real mode
-            self.save_emails(emails)
-        return ok
+            if message_id in existing_map:
+                # Update existing email
+                existing_map[message_id].update(gmail_email)
+            else:
+                # Add new email
+                existing_emails.append(gmail_email)
+                existing_map[message_id] = gmail_email
 
-    def get_email_by_id(self, message_id: str) -> Optional[Dict]:
-        for e in self.load_emails():
-            if e["message_id"] == message_id:
-                return e
-        return None
+        # Save to CSV
+        self._save_to_path(self.csv_path, existing_emails)
+        return existing_emails
+
+    def save_emails(self, emails: List[Dict]) -> None:
+        """
+        Save emails to storage (respects test mode - won't save to emails_mod.csv).
+        """
+        # Re-check test mode
+        self._update_mode()
+
+        if self.is_test_mode():
+            print("[STORAGE] Test mode active - changes not saved to emails_mod.csv")
+            return
+
+        self._save_to_path(self.csv_path, emails)
+        print(f"[STORAGE] Saved {len(emails)} emails to {self.csv_path}")
+
+    def _save_to_path(self, path: str, emails: List[Dict]) -> None:
+        """Internal method to save emails to a specific path"""
+        fieldnames = [
+            'message_id', 'sender', 'sender_name', 'sender_domain', 'subject', 'datetime',
+            'attachment_count', 'attachment_names', 'mime_types', 'tag',
+            'is_last_downloaded', 'needs_more_info', 'rule_applied'
+        ]
+
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+
+            with open(path, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for email in emails:
+                    # Convert lists to pipe-separated strings
+                    email_copy = email.copy()
+                    if isinstance(email_copy.get('attachment_names'), list):
+                        email_copy['attachment_names'] = '|'.join(email_copy['attachment_names'])
+                    if isinstance(email_copy.get('mime_types'), list):
+                        email_copy['mime_types'] = '|'.join(email_copy['mime_types'])
+
+                    # Ensure all fields exist with proper defaults
+                    for field in fieldnames:
+                        if field not in email_copy:
+                            if field in ['attachment_count', 'is_last_downloaded', 'needs_more_info']:
+                                email_copy[field] = 0
+                            else:
+                                email_copy[field] = ''
+
+                    writer.writerow(email_copy)
+
+            print(f"[STORAGE] Successfully wrote {len(emails)} emails to {path}")
+        except Exception as e:
+            print(f"[STORAGE] Error saving to {path}: {e}")
+            import traceback
+            traceback.print_exc()
