@@ -6,6 +6,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from email.utils import parsedate_to_datetime
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.labels",
@@ -103,6 +104,14 @@ class GmailClient:
 
         return attachments
 
+    def _parse_date_hungarian(self, date_str):
+        """Parse email date and format as YYYY.MM.DD HH:MM"""
+        try:
+            dt = parsedate_to_datetime(date_str)
+            return dt.strftime('%Y.%m.%d %H:%M')
+        except Exception:
+            return 'N/A'
+
     def authenticate(self):
         # Load existing token
         if os.path.exists(self.token_path):
@@ -171,60 +180,61 @@ class GmailClient:
             "date": headers.get("Date", "")
         }
 
-    def get_email_full_details(self, message_id: str) -> dict:
+    def get_email_full_details(self, message_id):
         """
-        Fetch comprehensive email details including:
-        - message_id
-        - sender (From)
-        - subject
-        - datetime (formatted as YYYY.MM.DD HH:MM in Hungarian locale)
-        - attachment_count
-        - attachment_names (list of filenames)
+        Fetch full email details including sender, subject, datetime, attachments with MIME types
         """
-        if not self.service:
-            raise RuntimeError("Call authenticate() first.")
+        try:
+            message = self.service.users().messages().get(
+                userId='me',
+                id=message_id,
+                format='full'
+            ).execute()
 
-        # Fetch full message
-        msg = self.service.users().messages().get(
-            userId="me",
-            id=message_id,
-            format="full"
-        ).execute()
+            headers = message['payload']['headers']
+            sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown')
+            subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), '(no subject)')
+            date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
 
-        # Extract headers
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            # Parse and format date in Hungarian style
+            datetime_hu = self._parse_date_hungarian(date_str)
 
-        # Get sender
-        sender = headers.get("From", "(unknown sender)")
+            # Get attachments with MIME types
+            attachment_count = 0
+            attachment_names = []
+            mime_types = []
 
-        # Get subject
-        subject = headers.get("Subject", "(no subject)")
+            def process_parts(parts):
+                nonlocal attachment_count, attachment_names, mime_types
+                for part in parts:
+                    # Check for nested parts
+                    if 'parts' in part:
+                        process_parts(part['parts'])
 
-        # Get and format date
-        date_str = headers.get("Date", "")
-        formatted_datetime = "N/A"
-        if date_str:
-            try:
-                from email.utils import parsedate_to_datetime
-                dt = parsedate_to_datetime(date_str)
-                # Format as YYYY.MM.DD HH:MM
-                formatted_datetime = dt.strftime("%Y.%m.%d %H:%M")
-            except (ValueError, TypeError):
-                formatted_datetime = "N/A"
+                    # Check if part is an attachment
+                    filename = part.get('filename', '')
+                    if filename:
+                        attachment_count += 1
+                        attachment_names.append(filename)
+                        mime_type = part.get('mimeType', 'application/octet-stream')
+                        mime_types.append(mime_type)
 
-        # Extract attachments
-        payload = msg.get("payload", {})
-        attachment_names = self._extract_attachments(payload)
-        attachment_count = len(attachment_names)
+            if 'parts' in message['payload']:
+                process_parts(message['payload']['parts'])
 
-        return {
-            "message_id": message_id,
-            "sender": sender,
-            "subject": subject,
-            "datetime": formatted_datetime,
-            "attachment_count": attachment_count,
-            "attachment_names": attachment_names
-        }
+            return {
+                'message_id': message_id,
+                'sender': sender,
+                'subject': subject,
+                'datetime': datetime_hu,
+                'attachment_count': attachment_count,
+                'attachment_names': attachment_names,
+                'mime_types': mime_types
+            }
+
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+            return None
 
     def get_message(self, message_id: str) -> Dict:
         """
