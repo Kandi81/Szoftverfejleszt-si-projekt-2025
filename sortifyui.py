@@ -98,20 +98,24 @@ def update_attachment_button_count(emails):
 
 
 def load_offline_emails():
-    emails = email_storage.load_emails()
-    if not emails:
-        treeemails.insert("", tk.END, values=("Feladó/Email/Tag/📎/Dátum megjelenik itt", "", "", "", ""))
-        return
+    try:
+        emails = email_storage.load_emails()
+        if not emails:
+            treeemails.insert("", tk.END, values=("Feladó/Email/Tag/📎/Dátum megjelenik itt", "", "", "", ""))
+            return
 
-    apply_rules(emails)
+        apply_rules(emails)
 
-    populate_tree_from_emails(emails)
-    update_tag_counts_from_storage(emails)
-    update_attachment_button_count(emails)
+        populate_tree_from_emails(emails)
+        update_tag_counts_from_storage(emails)
+        update_attachment_button_count(emails)
 
-    # Enable "Mind" checkbox if emails exist (even in test mode)
-    if emails:
-        chkselectall.config(state="normal")
+        # Enable "Mind" checkbox if emails exist (even in test mode)
+        if emails:
+            chkselectall.config(state="normal")
+    except Exception as e:
+        print(f"[ERROR] Failed to load offline emails: {e}")
+        messagebox.showerror("Hiba", f"Email betöltési hiba:\n{e}")
 
 
 def get_emails(_event):
@@ -268,6 +272,7 @@ def clear_filters():
     current_filter_label = ""
     filter_status_label.config(text="")
     btnattachcheck.config(state="disabled")
+    btncategorize.config(state="disabled")
     btnclearfilters.place_forget()
 
 
@@ -490,7 +495,6 @@ def check_initial_login_state():
     global gmail_client
     token_path = str(resource_path(os.path.join("resource", "token.json")))
     if os.path.exists(token_path):
-        btnsession.config(text="Kijelentkezés")
         try:
             credentials_path = str(resource_path(os.path.join("resource", "credentials.json")))
             gmail_client = gmailclient.GmailClient(
@@ -498,8 +502,11 @@ def check_initial_login_state():
                 token_path=token_path
             )
             gmail_client.authenticate()
-        except (HttpError, Exception):
+            btnsession.config(text="Kijelentkezés")
+        except (HttpError, Exception) as e:
+            print(f"[ERROR] Auto-login failed: {e}")
             gmail_client = None
+            btnsession.config(text="Bejelentkezés")
     else:
         btnsession.config(text="Bejelentkezés")
     update_get_emails_button_state()
@@ -519,7 +526,7 @@ def on_key_press(event):
 
 # Window and styles
 windowsortify = tk.Tk()
-windowsortify.title("Sortify v0.3.0")  # Changed from v1.0
+windowsortify.title("Sortify v0.3.0")
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1024x743")
 
@@ -576,7 +583,7 @@ style.map("btnsettings.TButton", background=[("active", "#E4E2E2")],
 
 btnsettings = ttk.Button(master=frameactionbar, text="⚙", style="btnsettings.TButton",
                          command=open_settings)
-btnsettings.place(x=865, y=9, width=40, height=40)  # Moved to x=843 with safe spacing
+btnsettings.place(x=865, y=9, width=40, height=40)  # Placed by scott
 
 # Login/Logout button
 style.configure("btnsession.TButton", background="#E4E2E2", foreground="#000")
@@ -692,9 +699,14 @@ windowsortify.bind("<Key>", on_key_press)
 # Initial state
 check_initial_login_state()
 
+# Update UI based on test mode
 if email_storage.is_test_mode():
     test_mode_label.config(text="Teszt mód: emails_mod.csv van betöltve. A frissítés le van tiltva.")
     btngetmails.config(state="disabled")
+else:
+    test_mode_label.config(text="")
+    # Re-apply the correct state based on login status
+    update_get_emails_button_state()
 
 load_offline_emails()
 
