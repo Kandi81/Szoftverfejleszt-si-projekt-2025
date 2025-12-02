@@ -1,13 +1,15 @@
 import os
-from typing import List, Dict, Optional
-
+import base64
+from email.mime.text import MIMEText
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from email.utils import parsedate_to_datetime
+import re
+from datetime import datetime
 
+# If modifying these scopes, delete the file token.json.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.modify",
@@ -16,173 +18,111 @@ SCOPES = [
 
 
 class GmailClient:
-    def __init__(self,
-                 credentials_path: str = "resource\\credentials.json",
-                 token_path: str = "token.json",
-                 scopes: Optional[List[str]] = None):
+    def __init__(self, credentials_path='credentials.json', token_path='token.json'):
         self.credentials_path = credentials_path
         self.token_path = token_path
-        self.scopes = scopes or SCOPES
-        self.creds: Optional[Credentials] = None
+        self.creds = None
         self.service = None
 
-    def _extract_text_from_payload(self, payload: Dict) -> str:
-        """
-        Recursively extract the text body from a Gmail message payload.
-        Prefers text/plain; falls back to text/html (converted to text).
-        """
-        import base64
-        mime_type = payload.get("mimeType", "")
-        body = payload.get("body", {})
-        data = body.get("data")
-        parts = payload.get("parts", [])
-
-        def b64url_decode(b64: str) -> str:
-            return base64.urlsafe_b64decode(b64.encode("utf-8")).decode("utf-8", errors="replace")
-
-        # Leaf part: text/plain
-        if mime_type == "text/plain" and data:
-            return b64url_decode(data).strip()
-
-        # Multipart: search children (text/plain first)
-        if parts:
-            for p in parts:
-                if p.get("mimeType") == "text/plain":
-                    txt = self._extract_text_from_payload(p)
-                    if txt:
-                        return txt
-            # Fallback to text/html
-            for p in parts:
-                if p.get("mimeType") == "text/html":
-                    html_txt = self._extract_text_from_payload(p)
-                    if html_txt:
-                        return self._minimal_html_to_text(html_txt)
-
-        # Leaf part: text/html
-        if mime_type == "text/html" and data:
-            html = b64url_decode(data)
-            return self._minimal_html_to_text(html)
-
-        # If content is not inline (e.g., attachmentId present), skip here.
-        return ""
-
-    @staticmethod
-    def _minimal_html_to_text(html: str) -> str:
-        """
-        Very light HTML-to-text conversion for previews.
-        Consider a library (html2text, beautifulsoup4) for richer handling.
-        """
-        import re
-        txt = html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-        txt = re.sub(r"<style.*?>.*?</style>", "", txt, flags=re.S | re.I)
-        txt = re.sub(r"<script.*?>.*?</script>", "", txt, flags=re.S | re.I)
-        txt = re.sub(r"<[^>]+>", "", txt)
-        return re.sub(r"\n{3,}", "\n\n", txt).strip()
-
-    @staticmethod
-    def _extract_attachments(payload: Dict) -> List[str]:
-        """
-        Extract attachment filenames from message payload.
-        Returns list of filenames.
-        """
-        attachments = []
-
-        def process_parts(parts):
-            for part in parts:
-                # Check if this part has a filename
-                filename = part.get("filename", "")
-                if filename:
-                    attachments.append(filename)
-
-                # Recursively process nested parts
-                if "parts" in part:
-                    process_parts(part["parts"])
-
-        # Check if payload has parts
-        if "parts" in payload:
-            process_parts(payload["parts"])
-
-        return attachments
-
-    def _parse_date_hungarian(self, date_str):
-        """Parse email date and format as YYYY.MM.DD HH:MM"""
-        try:
-            dt = parsedate_to_datetime(date_str)
-            return dt.strftime('%Y.%m.%d %H:%M')
-        except Exception:
-            return 'N/A'
-
     def authenticate(self):
-        # Load existing token
+        """Authenticate with Gmail API"""
         if os.path.exists(self.token_path):
-            self.creds = Credentials.from_authorized_user_file(self.token_path, self.scopes)
-        # Refresh or run OAuth flow
+            self.creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
+
+        # If there are no (valid) credentials available, let the user log in.
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
             else:
-                flow = InstalledAppFlow.from_client_secrets_file(self.credentials_path, self.scopes)
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    self.credentials_path, SCOPES)
                 self.creds = flow.run_local_server(port=0)
-            with open(self.token_path, "w") as token:
+            # Save the credentials for the next run
+            with open(self.token_path, 'w') as token:
                 token.write(self.creds.to_json())
-        # Build one reusable service
-        self.service = build("gmail", "v1", credentials=self.creds)
 
-    def list_inbox(self, query: str = "", max_results: int = 1000) -> List[Dict]:
-        """
-        List message ids in INBOX, optionally filtered by Gmail search query (e.g., 'is:unread after:2025/09/01').
-        """
-        if not self.service:
-            raise RuntimeError("Call authenticate() first.")
-        msgs = []
-        req = self.service.users().messages().list(userId="me",
-                                                   labelIds=["INBOX"],
-                                                   q=query,
-                                                   maxResults=min(500, max_results))
-        while req is not None and len(msgs) < max_results:
-            resp = req.execute()
-            msgs.extend(resp.get("messages", []))
-            if len(msgs) >= max_results:
-                break
-            req = self.service.users().messages().list_next(previous_request=req, previous_response=resp)
-        return msgs
+        self.service = build('gmail', 'v1', credentials=self.creds)
 
-    def get_subject(self, message_id: str) -> str:
-        """
-        Fetch a message's Subject efficiently using metadata format.
-        """
-        if not self.service:
-            raise RuntimeError("Call authenticate() first.")
-        msg = self.service.users().messages().get(
-            userId="me",
-            id=message_id,
-            format="metadata",
-            metadataHeaders=["Subject"]
-        ).execute()
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        return headers.get("Subject", "(no subject)")
+    def list_inbox(self, query='', max_results=100):
+        """List emails from inbox"""
+        try:
+            results = self.service.users().messages().list(
+                userId='me',
+                q=query,
+                maxResults=max_results
+            ).execute()
+            messages = results.get('messages', [])
+            return messages
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+            return []
 
-    def get_subject_and_date(self, message_id: str) -> dict:
-        """
-        Fetch a message's Subject and Date efficiently using metadata format.
-        """
-        if not self.service:
-            raise RuntimeError("Call authenticate() first.")
-        msg = self.service.users().messages().get(
-            userId="me",
-            id=message_id,
-            format="metadata",
-            metadataHeaders=["Subject", "Date"]
-        ).execute()
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        return {
-            "subject": headers.get("Subject", "(no subject)"),
-            "date": headers.get("Date", "")
-        }
+    def _parse_date_hungarian(self, date_str):
+        """Parse email date and return in Hungarian format: YYYY.MM.DD HH:MM"""
+        if not date_str:
+            return "N/A"
 
-    def get_email_full_details(self, message_id):
-        """
-        Fetch full email details including sender, subject, datetime, attachments with MIME types
+        try:
+            # Gmail API returns dates in RFC 2822 format or Unix timestamp
+            # Example: "Mon, 15 Nov 2021 10:30:00 +0100"
+
+            # Try parsing common formats
+            formats = [
+                "%a, %d %b %Y %H:%M:%S %z",  # RFC 2822
+                "%d %b %Y %H:%M:%S %z",
+                "%Y-%m-%d %H:%M:%S",
+            ]
+
+            dt = None
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(date_str, fmt)
+                    break
+                except ValueError:
+                    continue
+
+            if dt:
+                return dt.strftime("%Y.%m.%d %H:%M")
+
+            return date_str  # Return original if parsing fails
+        except Exception as e:
+            print(f"Date parsing error: {e}")
+            return date_str
+
+    def _extract_body_from_part(self, part):
+        """Recursively extract body from message part"""
+        body_data = {'plain': '', 'html': ''}
+
+        mime_type = part.get('mimeType', '')
+
+        if mime_type == 'text/plain':
+            if 'data' in part.get('body', {}):
+                body_data['plain'] = base64.urlsafe_b64decode(
+                    part['body']['data']
+                ).decode('utf-8', errors='ignore')
+
+        elif mime_type == 'text/html':
+            if 'data' in part.get('body', {}):
+                body_data['html'] = base64.urlsafe_b64decode(
+                    part['body']['data']
+                ).decode('utf-8', errors='ignore')
+
+        elif mime_type.startswith('multipart/'):
+            # Recursively process multipart
+            for subpart in part.get('parts', []):
+                sub_body = self._extract_body_from_part(subpart)
+                if sub_body['plain']:
+                    body_data['plain'] += sub_body['plain']
+                if sub_body['html']:
+                    body_data['html'] += sub_body['html']
+
+        return body_data
+
+    def get_email_body(self, message_id):
+        """Extract email body (both plain and HTML if available)
+
+        Returns:
+            dict: {'plain': str, 'html': str}
         """
         try:
             message = self.service.users().messages().get(
@@ -191,116 +131,106 @@ class GmailClient:
                 format='full'
             ).execute()
 
+            payload = message.get('payload', {})
+            body_data = {'plain': '', 'html': ''}
+
+            # Check if message has parts (multipart)
+            if 'parts' in payload:
+                body_data = self._extract_body_from_part(payload)
+            else:
+                # Single part message
+                body_data = self._extract_body_from_part(payload)
+
+            return body_data
+
+        except HttpError as error:
+            print(f'Error fetching body for {message_id}: {error}')
+            return {'plain': '', 'html': ''}
+
+    def _extract_mime_types_recursive(self, part, mime_types):
+        """Recursively extract MIME types from all parts"""
+        mime_type = part.get('mimeType')
+        if mime_type:
+            mime_types.append(mime_type)
+
+        # Recurse into subparts
+        if 'parts' in part:
+            for subpart in part['parts']:
+                self._extract_mime_types_recursive(subpart, mime_types)
+
+    def get_email_full_details(self, message_id):
+        """Get full email details including attachments and body"""
+        try:
+            message = self.service.users().messages().get(
+                userId='me',
+                id=message_id,
+                format='full'
+            ).execute()
+
             headers = message['payload']['headers']
-            sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown')
             subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), '(no subject)')
+            sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown')
             date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
 
-            # Parse and format date in Hungarian style
-            datetime_hu = self._parse_date_hungarian(date_str)
+            # Parse date
+            formatted_date = self._parse_date_hungarian(date_str)
 
-            # Get attachments with MIME types
-            attachment_count = 0
-            attachment_names = []
+            # Extract attachments
+            attachments = []
             mime_types = []
 
-            def process_parts(parts):
-                nonlocal attachment_count, attachment_names, mime_types
-                for part in parts:
-                    # Check for nested parts
-                    if 'parts' in part:
-                        process_parts(part['parts'])
+            def extract_attachments(part):
+                if 'filename' in part and part['filename']:
+                    attachments.append(part['filename'])
 
-                    # Check if part is an attachment
-                    filename = part.get('filename', '')
-                    if filename:
-                        attachment_count += 1
-                        attachment_names.append(filename)
-                        mime_type = part.get('mimeType', 'application/octet-stream')
-                        mime_types.append(mime_type)
+                # Extract MIME type
+                mime_type = part.get('mimeType')
+                if mime_type:
+                    mime_types.append(mime_type)
 
-            if 'parts' in message['payload']:
-                process_parts(message['payload']['parts'])
+                # Recurse into parts
+                if 'parts' in part:
+                    for subpart in part['parts']:
+                        extract_attachments(subpart)
+
+            extract_attachments(message['payload'])
+
+            # Get body (both plain and HTML)
+            body_data = self.get_email_body(message_id)
 
             return {
                 'message_id': message_id,
-                'sender': sender,
                 'subject': subject,
-                'datetime': datetime_hu,
-                'attachment_count': attachment_count,
-                'attachment_names': attachment_names,
-                'mime_types': mime_types
+                'sender': sender,
+                'datetime': formatted_date,
+                'attachment_count': len(attachments),
+                'attachment_names': '|'.join(attachments) if attachments else '',
+                'mime_types': '|'.join(mime_types) if mime_types else '',
+                'body_plain': body_data.get('plain', ''),
+                'body_html': body_data.get('html', ''),
+                'is_last_downloaded': 1  # Mark as newly downloaded
             }
 
         except HttpError as error:
-            print(f'An error occurred: {error}')
+            print(f'Error fetching email {message_id}: {error}')
             return None
 
-    def get_message(self, message_id: str) -> Dict:
-        """
-        Fetch full message payload if needed later.
-        """
-        if not self.service:
-            raise RuntimeError("Call authenticate() first.")
-        return self.service.users().messages().get(userId="me", id=message_id, format="full").execute()
+    def send_message(self, to, subject, body):
+        """Send an email message"""
+        try:
+            message = MIMEText(body)
+            message['to'] = to
+            message['subject'] = subject
 
-    def get_subject_and_body(self, message_id: str) -> dict:
-        if not self.service:
-            raise RuntimeError("Call authenticate() first.")
-        full = self.get_message(message_id)
-        headers = {h["name"]: h["value"] for h in full.get("payload", {}).get("headers", [])}
-        subject = headers.get("Subject", "(no subject)")
-        text = self._extract_text_from_payload(full.get("payload", {})) or full.get("snippet", "")
-        return {"subject": subject, "text": text}
+            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
-    # Jozsi
-    def create_label(self, name, label_list_visibility='labelShow', message_list_visibility='show'):
-        label = {
-            'name': name,
-            'labelListVisibility': label_list_visibility,
-            'messageListVisibility': message_list_visibility
-        }
-        created_label = self.service.users().labels().create(userId='me', body=label).execute()
-        return created_label
+            send_message = self.service.users().messages().send(
+                userId='me',
+                body={'raw': raw_message}
+            ).execute()
 
-    def list_labels(self):
-        results = self.service.users().labels().list(userId='me').execute()
-        labels = results.get('labels', [])
-        return labels
-
-    def get_label_details(self, label_id):
-        return self.service.users().labels().get(userId='me', id=label_id).execute()
-
-    def modify_label(self, label_id, **updates):
-        label = self.service.users().labels().update(userId='me', id=label_id).execute()
-        for key, value in updates.items():
-            label[key] = value
-        updated_label = self.service.users().labels().update(userId='me', id=label_id, body=label).execute()
-        return updated_label
-
-    def delete_label(self, label_id):
-        self.service.users().labels().delete(userId='me', id=label_id).execute()
-
-    def map_label_name_to_id(self, label_name):
-        labels = self.list_labels()
-        label = next((label for label in labels if label['name'] == label_name), None)
-        return label['id'] if label else None
-
-    # /Jozsi
-
-
-if __name__ == "__main__":
-    try:
-        client = GmailClient(credentials_path="resource\\credentials.json", token_path="resource/token.json")
-        client.authenticate()
-        messages = client.list_inbox(query="", max_results=5)
-        for m in messages:
-            details = client.get_email_full_details(m["id"])
-            print(f"\nMessage ID: {details['message_id']}")
-            print(f"From: {details['sender']}")
-            print(f"Subject: {details['subject']}")
-            print(f"DateTime: {details['datetime']}")
-            print(
-                f"Attachments ({details['attachment_count']}): {', '.join(details['attachment_names']) if details['attachment_names'] else 'None'}")
-    except HttpError as e:
-        print(f"Gmail API error: {e}")
+            print(f'Message Id: {send_message["id"]}')
+            return send_message
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+            return None

@@ -1,14 +1,18 @@
 import sys
 import os
+# Fix tkhtmlview compatibility with newer Pillow
+import html_renderer_fix  # noqa: F401
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from googleapiclient.errors import HttpError
 from email.utils import parseaddr
+from tkhtmlview import HTMLScrolledText  # NEW IMPORT
 import gmailclient
 from email_storage import EmailStorage
 from rules import apply_rules
 from attachment_verifier import verify_emails_batch
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,6 +49,9 @@ email_data_map = {}
 # Sorting state
 sort_column = "Date"
 sort_reverse = True
+
+# Details panel widgets (will be initialized later)
+detail_widgets = {}
 
 
 def populate_tree_from_emails(emails):
@@ -118,6 +125,125 @@ def load_offline_emails():
         messagebox.showerror("Hiba", f"Email betöltési hiba:\n{e}")
 
 
+def update_details_panel(email_data):
+    """Update the details panel with selected email data"""
+    if not email_data:
+        # Clear panel
+        detail_widgets['sender_value'].config(text="")
+        detail_widgets['subject_value'].config(text="")
+        detail_widgets['date_value'].config(text="")
+        detail_widgets['tag_value'].config(text="")
+        detail_widgets['ai_summary'].config(state='normal')
+        detail_widgets['ai_summary'].delete('1.0', tk.END)
+        detail_widgets['ai_summary'].config(state='disabled')
+        detail_widgets['body'].set_html(
+            '<p style="color: #999;">Válasszon ki egy emailt a részletek megtekintéséhez.</p>')  # CHANGED
+
+        # Hide all attachment buttons
+        for btn in detail_widgets['attachment_buttons']:
+            btn.place_forget()
+        detail_widgets['btnattachcheck'].place_forget()
+        return
+
+    # Update fields
+    detail_widgets['sender_value'].config(text=email_data.get('sender_name', 'N/A'))
+    detail_widgets['subject_value'].config(text=email_data.get('subject', '(no subject)'))
+    detail_widgets['date_value'].config(text=email_data.get('datetime', 'N/A'))
+
+    # Tag (only show if exists and not '----')
+    tag = email_data.get('tag', '----')
+    if tag and tag != '----':
+        detail_widgets['tag_value'].config(text=tag)
+    else:
+        detail_widgets['tag_value'].config(text="")
+
+    # AI Summary (placeholder for now - will be loaded from CSV later)
+    ai_summary = email_data.get('ai_summary', '')
+    detail_widgets['ai_summary'].config(state='normal')
+    detail_widgets['ai_summary'].delete('1.0', tk.END)
+    if ai_summary:
+        detail_widgets['ai_summary'].insert('1.0', ai_summary)
+    else:
+        detail_widgets['ai_summary'].insert('1.0', '[AI összefoglaló itt jelenik meg a későbbiekben]')
+    detail_widgets['ai_summary'].config(state='disabled')
+
+    # Message body (HTML rendered)
+    body_html = email_data.get('body_html', '')
+    body_plain = email_data.get('body_plain', '')
+
+    if body_html:
+        # Use HTML version with full formatting
+        detail_widgets['body'].set_html(body_html)
+    elif body_plain:
+        # Fallback to plain text wrapped in <pre> tag
+        escaped_plain = body_plain.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        detail_widgets['body'].set_html(
+            f'<pre style="font-family: Arial; font-size: 12px; white-space: pre-wrap;">{escaped_plain}</pre>')
+    else:
+        detail_widgets['body'].set_html('<p style="color: #999;">Nincs üzenet törzs.</p>')
+
+    # Attachments
+    attachment_count = int(email_data.get('attachment_count', 0))
+    attachment_names = email_data.get('attachment_names', '')
+
+    # Parse attachment names (semicolon or pipe separated, or list)
+    attachments = []
+    if attachment_names and isinstance(attachment_names, str):
+        import re
+        attachments = [a.strip() for a in re.split(r'[;|]', attachment_names) if a.strip()]
+    elif isinstance(attachment_names, list):
+        attachments = [str(a).strip() for a in attachment_names if str(a).strip()]
+
+    # Hide all buttons first
+    for btn in detail_widgets['attachment_buttons']:
+        btn.place_forget()
+    detail_widgets['btnattachcheck'].place_forget()
+
+    # Show up to 3 attachment buttons
+    max_chars = 30
+    for idx, filename in enumerate(attachments[:3]):
+        # Truncate filename if too long (preserve extension)
+        if len(filename) > max_chars:
+            # Split name and extension
+            if '.' in filename:
+                name_part = filename.rsplit('.', 1)[0]
+                ext_part = '.' + filename.rsplit('.', 1)[1]
+                # Truncate name part to fit
+                available = max_chars - len(ext_part) - 3  # 3 for "..."
+                display_name = name_part[:available] + "..." + ext_part
+            else:
+                display_name = filename[:max_chars - 3] + "..."
+        else:
+            display_name = filename
+
+        detail_widgets['attachment_buttons'][idx].config(text=f"📎 {display_name}")
+        detail_widgets['attachment_buttons'][idx].place(x=10, y=580 + (idx * 35), width=450, height=30)
+
+    # Show "Csatolmányok ellenőrzése" button if attachments exist
+    if attachment_count > 0:
+        detail_widgets['btnattachcheck'].place(x=470, y=580, width=210, height=30)
+
+
+def on_tree_select(_event=None):
+    """Handle TreeView selection change"""
+    selected_items = treeemails.selection()
+
+    # Update categorize button state
+    if selected_items and not is_filtered:
+        btncategorize.config(state="normal")
+    else:
+        btncategorize.config(state="disabled")
+
+    # Update details panel
+    if len(selected_items) == 1:
+        item_id = selected_items[0]
+        email_data = email_data_map.get(item_id, {})
+        update_details_panel(email_data)
+    else:
+        # No selection or multiple selection
+        update_details_panel(None)
+
+
 def get_emails(_event):
     global is_filtered, categorized_items, attachment_filter_active
 
@@ -158,6 +284,12 @@ def get_emails(_event):
         for idx, msg in enumerate(messages, start=1):
             try:
                 details = gmail_client.get_email_full_details(msg["id"])
+
+                # DEBUG: Check if body was fetched
+                print(f"[DEBUG] Email {idx}: message_id={details.get('message_id', 'N/A')}")
+                print(f"[DEBUG]   body_plain length: {len(details.get('body_plain', ''))}")
+                print(f"[DEBUG]   body_html length: {len(details.get('body_html', ''))}")
+
                 name, addr = parseaddr(details.get("sender", ""))
                 domain = addr.split("@", 1)[-1] if "@" in addr else ""
                 details["sender_name"] = name or addr
@@ -169,11 +301,9 @@ def get_emails(_event):
                 gmail_emails.append(details)
             except Exception as e:
                 print(f"Hiba az üzenet feldolgozásakor: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
-            finally:
-                progress = 10 + int((idx / total) * detail_progress_range)
-                pbaremails.config(value=progress)
-                windowsortify.update()
 
         # Step 3: Apply rules (90-95% of progress)
         pbaremails.config(value=90)
@@ -232,7 +362,6 @@ def filter_by_tag(tag_name):
     current_filter_label = tag_name.capitalize()
     filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
-    btnattachcheck.config(state="disabled")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
 
 
@@ -254,7 +383,6 @@ def filter_by_attachment():
     current_filter_label = "Csatolmány"
     filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
-    btnattachcheck.config(state="normal")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
 
 
@@ -271,25 +399,27 @@ def clear_filters():
     attachment_filter_active = False
     current_filter_label = ""
     filter_status_label.config(text="")
-    btnattachcheck.config(state="disabled")
     btncategorize.config(state="disabled")
     btnclearfilters.place_forget()
 
 
 def verify_attachments():
-    """Verify attachments for filtered emails"""
-    # Get all visible (filtered) emails
-    filtered_emails = []
-    for item_id in treeemails.get_children():
-        if item_id in email_data_map:
-            filtered_emails.append(email_data_map[item_id])
+    """Verify attachments for the currently selected email"""
+    selected_items = treeemails.selection()
 
-    if not filtered_emails:
-        messagebox.showinfo("Info", "Nincs szűrt email csatolmánnyal.")
+    if len(selected_items) != 1:
+        messagebox.showinfo("Info", "Válasszon ki pontosan egy emailt a csatolmányok ellenőrzéséhez.")
         return
 
-    # Run verification
-    results = verify_emails_batch(filtered_emails)
+    item_id = selected_items[0]
+    email_data = email_data_map.get(item_id, {})
+
+    if int(email_data.get('attachment_count', 0)) == 0:
+        messagebox.showinfo("Info", "Ennek az emailnek nincs csatolmánya.")
+        return
+
+    # Run verification on single email
+    results = verify_emails_batch([email_data])
 
     # Display results
     total = results['total_attachments']
@@ -302,18 +432,13 @@ def verify_attachments():
                             f"Minden csatolmány rendben van! ✓")
     else:
         # Build detailed message
+        email_info = results['suspicious_emails'][0]
         msg = f"Ellenőrzött csatolmányok: {total}\nGyanús fájlok: {suspicious}\n\n"
-        msg += "GYANÚS EMAILEK:\n" + "=" * 50 + "\n\n"
+        msg += "GYANÚS CSATOLMÁNYOK:\n" + "=" * 50 + "\n\n"
 
-        for idx, email_data in enumerate(results['suspicious_emails'], start=1):
-            msg += f"{idx}. {email_data['subject'][:50]}\n"
-            msg += f"   Feladó: {email_data['sender_name']}\n"
-            msg += f"   Dátum: {email_data['datetime']}\n"
-
-            for att in email_data['suspicious_attachments']:
-                msg += f"   ⚠️  {att['filename']}\n"
-                msg += f"      {att['reason']}\n"
-            msg += "\n"
+        for att in email_info['suspicious_attachments']:
+            msg += f"⚠️  {att['filename']}\n"
+            msg += f"   {att['reason']}\n\n"
 
         messagebox.showwarning("FIGYELEM - Gyanús csatolmányok", msg)
 
@@ -438,14 +563,6 @@ def uncheck_select_all_checkbox(_event):
     select_all_var.set(False)
 
 
-def check_selection(_event=None):
-    selected_items = treeemails.selection()
-    if selected_items and not is_filtered:
-        btncategorize.config(state="normal")
-    else:
-        btncategorize.config(state="disabled")
-
-
 def open_settings():
     """Open settings window"""
     from settings_ui import SettingsWindow
@@ -528,18 +645,25 @@ def on_key_press(event):
 windowsortify = tk.Tk()
 windowsortify.title("Sortify v0.3.0")
 windowsortify.config(bg="#E4E2E2")
-windowsortify.geometry("1024x743")
+windowsortify.geometry("1724x743")  # Expanded width: 1024 + 700
 
 style = ttk.Style(windowsortify)
 style.theme_use("clam")
 
+# Action bar - expanded width
 frameactionbar = tk.Frame(master=windowsortify)
 frameactionbar.config(bg="#EDECEC")
-frameactionbar.place(x=8, y=0, width=1010, height=55)
+frameactionbar.place(x=8, y=0, width=1710, height=55)
 
+# Main frame (left side - treeview)
 framemain = tk.Frame(master=windowsortify)
 framemain.config(bg="#EDECEC")
 framemain.place(x=5, y=59, width=1011, height=686)
+
+# Details frame (right side - email details)
+framedetails = tk.Frame(master=windowsortify)
+framedetails.config(bg="#F9F9F9")
+framedetails.place(x=1020, y=59, width=700, height=686)
 
 test_mode_label = tk.Label(master=framemain,
                            text="",
@@ -548,7 +672,7 @@ test_mode_label = tk.Label(master=framemain,
                            anchor="w")
 test_mode_label.place(x=10, y=0, width=800, height=20)
 
-# Buttons
+# Buttons (left side)
 style.configure("btngetmails.TButton", background="#E4E2E2", foreground="#000")
 style.map("btngetmails.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
@@ -566,35 +690,25 @@ btncategorize = ttk.Button(master=frameactionbar, text="Kategorizálás", style=
                            command=categorize_emails, state="disabled")
 btncategorize.place(x=160, y=9, width=110, height=40)
 
-style.configure("btnattachcheck.TButton", background="#E4E2E2", foreground="#000")
-style.map("btnattachcheck.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
-
-btnattachcheck = ttk.Button(master=frameactionbar, text="Csatolmányok ellenőrzése",
-                            style="btnattachcheck.TButton",
-                            command=verify_attachments,
-                            state="disabled")
-btnattachcheck.place(x=280, y=9, width=190, height=40)
-
-# Settings button - gear icon
+# Settings button - right aligned
 style.configure("btnsettings.TButton", background="#E4E2E2", foreground="#000", font=("", 14))
 style.map("btnsettings.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000")])
 
 btnsettings = ttk.Button(master=frameactionbar, text="⚙", style="btnsettings.TButton",
                          command=open_settings)
-btnsettings.place(x=865, y=9, width=40, height=40)  # Placed by scott
+btnsettings.place(x=1565, y=9, width=40, height=40)  # Right aligned
 
-# Login/Logout button
+# Login/Logout button - right aligned
 style.configure("btnsession.TButton", background="#E4E2E2", foreground="#000")
 style.map("btnsession.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
 
 btnsession = ttk.Button(master=frameactionbar, text="Bejelentkezés", style="btnsession.TButton",
                         command=session_login)
-btnsession.place(x=909, y=9, width=90, height=40)
+btnsession.place(x=1609, y=9, width=90, height=40)  # Right aligned
 
-# Tag buttons
+# Tag buttons (bottom of left panel)
 style.configure("btntagvezetosegi.TButton", background="#E4E2E2", foreground="#000")
 btntagvezetosegi = ttk.Button(master=framemain, text="Vezetoseg (0)", style="btntagvezetosegi.TButton",
                               state="disabled", command=lambda: filter_by_tag("vezetoseg"))
@@ -653,7 +767,7 @@ style.configure("treeemails.Treeview", background="#E4E2E2", foreground="#000", 
 treeemails = ttk.Treeview(master=framemain, selectmode="extended", style="treeemails.Treeview")
 treeemails.config(columns=("Sender", "Subject", "Tag", "Attach", "Date"), show='headings')
 treeemails.bind("<Button-1>", uncheck_select_all_checkbox)
-treeemails.bind("<<TreeviewSelect>>", check_selection)
+treeemails.bind("<<TreeviewSelect>>", on_tree_select)  # Updated binding
 treeemails.place(x=9, y=20, width=991, height=606)
 
 attach_header = "📎"
@@ -693,6 +807,79 @@ filter_status_label = tk.Label(master=frameactionbar,
                                anchor="w")
 filter_status_label.place(x=770, y=14, width=95, height=30)
 
+# ==================== DETAILS PANEL ====================
+
+# Sender (left side)
+lbl_sender = tk.Label(framedetails, text="Feladó:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
+lbl_sender.place(x=10, y=10, width=60, height=25)
+
+lbl_sender_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w")
+lbl_sender_value.place(x=75, y=10, width=420, height=25)
+
+# Date (right side - top corner)
+lbl_date_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#666", font=("", 9), anchor="e")
+lbl_date_value.place(x=500, y=10, width=190, height=25)
+
+# Subject (full width)
+lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="nw")
+lbl_subject.place(x=10, y=45, width=60, height=25)
+
+lbl_subject_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w", wraplength=600,
+                             justify="left")
+lbl_subject_value.place(x=75, y=45, width=615, height=25)  # Your adjusted coordinates
+
+# Tag (under date, only show if exists)
+lbl_tag_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#0066CC", font=("", 9, "italic"), anchor="e")
+lbl_tag_value.place(x=500, y=35, width=190, height=20)
+
+# AI Summary box (where attachments used to be)
+lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"),
+                          anchor="w")
+lbl_ai_summary.place(x=10, y=90, width=150, height=25)
+
+txt_ai_summary = tk.Text(framedetails, wrap='word', bg="#FFFACD", fg="#000", font=("", 9), height=3)
+txt_ai_summary.place(x=10, y=120, width=680, height=70)
+scroll_ai_summary = tk.Scrollbar(framedetails, command=txt_ai_summary.yview)
+txt_ai_summary.config(yscrollcommand=scroll_ai_summary.set, state='disabled')
+
+# Message body (HTML renderer)
+lbl_body = tk.Label(framedetails, text="Üzenet:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
+lbl_body.place(x=10, y=200, width=150, height=25)
+
+txt_body = HTMLScrolledText(framedetails, html="<p>Válasszon ki egy emailt a részletek megtekintéséhez.</p>")
+txt_body.place(x=10, y=230, width=680, height=340)
+
+
+# Attachment buttons (up to 3, positioned below message body)
+attachment_buttons = []
+for i in range(3):
+    btn = ttk.Button(framedetails, text=f"📎 Attachment {i + 1}", style="btngetmails.TButton")
+    attachment_buttons.append(btn)
+
+# "Csatolmányok ellenőrzése" button (positioned next to attachments)
+style.configure("btnattachcheck_detail.TButton", background="#E4E2E2", foreground="#000")
+style.map("btnattachcheck_detail.TButton", background=[("active", "#E4E2E2")],
+          foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
+
+btnattachcheck_detail = ttk.Button(framedetails, text="Csatolmányok ellenőrzése",
+                                   style="btnattachcheck_detail.TButton",
+                                   command=verify_attachments)
+
+# Store detail panel widgets in global dict for easy access
+detail_widgets = {
+    'sender_value': lbl_sender_value,
+    'subject_value': lbl_subject_value,
+    'date_value': lbl_date_value,
+    'tag_value': lbl_tag_value,
+    'ai_summary': txt_ai_summary,
+    'body': txt_body,
+    'attachment_buttons': attachment_buttons,
+    'btnattachcheck': btnattachcheck_detail
+}
+
+# Initialize with empty state
+update_details_panel(None)
+
 # Keyboard shortcuts
 windowsortify.bind("<Key>", on_key_press)
 
@@ -705,7 +892,6 @@ if email_storage.is_test_mode():
     btngetmails.config(state="disabled")
 else:
     test_mode_label.config(text="")
-    # Re-apply the correct state based on login status
     update_get_emails_button_state()
 
 load_offline_emails()
