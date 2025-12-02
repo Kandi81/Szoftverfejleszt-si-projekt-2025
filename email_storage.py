@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 from typing import List, Dict
 
 
@@ -8,31 +9,140 @@ class EmailStorage:
         self.default_csv_path = csv_path
         self.test_csv_path = "data/emails_mod.csv"
 
-        # Ensure data directory exists
+        # Ensure data and bodies directories exist
         os.makedirs("data", exist_ok=True)
+        os.makedirs("data/bodies", exist_ok=True)
 
         self._update_mode()
 
     def _update_mode(self):
-        """Check and update test mode status"""
+        """Check if test mode is active and set the appropriate CSV path"""
         if os.path.exists(self.test_csv_path):
-            self.test_mode = True
             self.csv_path = self.test_csv_path
-            print(f"[STORAGE] Test mode detected - using {self.csv_path}")
+            print(f"[STORAGE] Test mode detected - using {self.test_csv_path}")
         else:
-            self.test_mode = False
             self.csv_path = self.default_csv_path
-            print(f"[STORAGE] Production mode - using {self.csv_path}")
 
     def is_test_mode(self) -> bool:
-        """Check if running in test mode (emails_mod.csv exists)"""
-        # Re-check in case file was created/deleted
+        """Check if currently in test mode"""
         self._update_mode()
-        return self.test_mode
+        return self.csv_path == self.test_csv_path
+
+    def save_body_to_file(self, message_id: str, body_plain: str, body_html: str) -> tuple:
+        """Save email body to data/bodies/ folder
+
+        Args:
+            message_id: Email message ID
+            body_plain: Plain text body
+            body_html: HTML body
+
+        Returns:
+            tuple: (file_path, format) e.g. ('data/bodies/abc123.html', 'html')
+        """
+        os.makedirs("data/bodies", exist_ok=True)
+
+        # Prefer HTML if available, otherwise use plain text
+        if body_html and body_html.strip():
+            file_path = f"data/bodies/{message_id}.html"
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(body_html)
+                return file_path, 'html'
+            except Exception as e:
+                print(f"[STORAGE] Error saving HTML body for {message_id}: {e}")
+
+        if body_plain and body_plain.strip():
+            file_path = f"data/bodies/{message_id}.txt"
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(body_plain)
+                return file_path, 'plain'
+            except Exception as e:
+                print(f"[STORAGE] Error saving plain body for {message_id}: {e}")
+
+        # No body available
+        return '', ''
+
+    def load_body_from_file(self, body_file: str) -> str:
+        """Load email body from file
+
+        Args:
+            body_file: Path to body file (e.g. 'data/bodies/abc123.html')
+
+        Returns:
+            str: Body content (HTML stripped if applicable)
+        """
+        if not body_file or not os.path.exists(body_file):
+            return "Nincs üzenet törzs."
+
+        try:
+            with open(body_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # If HTML, strip tags for display
+            if body_file.endswith('.html'):
+                content = self._strip_html(content)
+
+            return content if content.strip() else "Üres üzenet törzs."
+
+        except Exception as e:
+            print(f"[STORAGE] Error loading body from {body_file}: {e}")
+            return f"Hiba a törzs betöltése közben: {e}"
+
+    def load_body_from_file_raw(self, body_file: str) -> tuple:
+        """Load email body from file WITHOUT stripping HTML
+
+        Args:
+            body_file: Path to body file
+
+        Returns:
+            tuple: (body_html, body_plain)
+        """
+        if not body_file or not os.path.exists(body_file):
+            return ("", "")
+
+        try:
+            with open(body_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            if body_file.endswith('.html'):
+                return (content, "")  # Return HTML as-is
+            else:
+                return ("", content)  # Return plain text as-is
+
+        except Exception as e:
+            print(f"[STORAGE] Error loading body from {body_file}: {e}")
+            return ("", "")
+
+    def _strip_html(self, html_content: str) -> str:
+        """Strip HTML tags and decode entities
+
+        Args:
+            html_content: HTML string
+
+        Returns:
+            str: Plain text without HTML tags
+        """
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', '', html_content)
+
+        # Decode common HTML entities
+        text = text.replace('&nbsp;', ' ')
+        text = text.replace('&amp;', '&')
+        text = text.replace('&lt;', '<')
+        text = text.replace('&gt;', '>')
+        text = text.replace('&quot;', '"')
+        text = text.replace('&#39;', "'")
+        text = text.replace('&apos;', "'")
+
+        # Remove excessive whitespace
+        text = re.sub(r'\n\s*\n', '\n\n', text)  # Max 2 consecutive newlines
+        text = re.sub(r' +', ' ', text)  # Collapse multiple spaces
+
+        return text.strip()
 
     def load_emails(self) -> List[Dict]:
         """Load emails from CSV file"""
-        # Update mode before loading
         self._update_mode()
 
         if not os.path.exists(self.csv_path):
@@ -44,150 +154,183 @@ class EmailStorage:
             with open(self.csv_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    # Safely convert numeric fields with defaults
+                    # Parse attachment names and MIME types (support both ; and | separators)
+                    attachment_names = re.split(r'[;|]', row.get("attachment_names", ""))
+                    attachment_names = [a.strip() for a in attachment_names if a.strip()]
+
+                    mime_types = re.split(r'[;|]', row.get("mime_types", ""))
+                    mime_types = [m.strip() for m in mime_types if m.strip()]
+
+                    # Convert numeric fields
                     try:
-                        row['attachment_count'] = int(row.get('attachment_count', 0) or 0)
+                        attachment_count = int(row.get("attachment_count", 0))
                     except (ValueError, TypeError):
-                        row['attachment_count'] = 0
+                        attachment_count = 0
 
                     try:
-                        row['is_last_downloaded'] = int(row.get('is_last_downloaded', 0) or 0)
+                        is_last_downloaded = int(row.get("is_last_downloaded", 0))
                     except (ValueError, TypeError):
-                        row['is_last_downloaded'] = 0
+                        is_last_downloaded = 0
 
                     try:
-                        row['needs_more_info'] = int(row.get('needs_more_info', 0) or 0)
+                        needs_more_info = int(row.get("needs_more_info", 0))
                     except (ValueError, TypeError):
-                        row['needs_more_info'] = 0
+                        needs_more_info = 0
 
-                    # Parse lists from strings (support both ; and | separators)
-                    if row.get('attachment_names'):
-                        # Try semicolon first (your format), then pipe (our format)
-                        if ';' in row['attachment_names']:
-                            row['attachment_names'] = [name.strip() for name in row['attachment_names'].split(';') if
-                                                       name.strip()]
-                        elif '|' in row['attachment_names']:
-                            row['attachment_names'] = [name.strip() for name in row['attachment_names'].split('|') if
-                                                       name.strip()]
-                        else:
-                            row['attachment_names'] = [row['attachment_names']] if row['attachment_names'] else []
+                    # Build email dict with all fields
+                    email = {
+                        "message_id": row.get("message_id", ""),
+                        "sender": row.get("sender", ""),
+                        "sender_name": row.get("sender_name", ""),
+                        "sender_domain": row.get("sender_domain", ""),
+                        "subject": row.get("subject", ""),
+                        "datetime": row.get("datetime", ""),
+                        "attachment_count": attachment_count,
+                        "attachment_names": attachment_names,
+                        "mime_types": mime_types,
+                        "tag": row.get("tag", "----"),
+                        "is_last_downloaded": is_last_downloaded,
+                        "needs_more_info": needs_more_info,
+                        "rule_applied": row.get("rule_applied", ""),
+                        "body_file": row.get("body_file", ""),
+                        "body_format": row.get("body_format", ""),
+                        "ai_summary": row.get("ai_summary", "")
+                    }
+
+                    # Load body content from file (RAW - don't strip HTML)
+                    if email["body_file"]:
+                        body_html, body_plain = self.load_body_from_file_raw(email["body_file"])
+                        email["body_html"] = body_html
+                        email["body_plain"] = body_plain
                     else:
-                        row['attachment_names'] = []
+                        email["body_html"] = ""
+                        email["body_plain"] = ""
 
-                    if row.get('mime_types'):
-                        # Try semicolon first (your format), then pipe (our format)
-                        if ';' in row['mime_types']:
-                            row['mime_types'] = [mt.strip() for mt in row['mime_types'].split(';') if mt.strip()]
-                        elif '|' in row['mime_types']:
-                            row['mime_types'] = [mt.strip() for mt in row['mime_types'].split('|') if mt.strip()]
-                        else:
-                            row['mime_types'] = [row['mime_types']] if row['mime_types'] else []
-                    else:
-                        row['mime_types'] = []
-
-                    # Ensure required fields exist
-                    row.setdefault('message_id', '')
-                    row.setdefault('sender', '')
-                    row.setdefault('sender_name', '')
-                    row.setdefault('sender_domain', '')
-                    row.setdefault('subject', '')
-                    row.setdefault('datetime', '')
-                    row.setdefault('tag', '----')
-                    row.setdefault('rule_applied', '')
-
-                    emails.append(row)
+                    emails.append(email)
 
             print(f"[STORAGE] Loaded {len(emails)} emails from {self.csv_path}")
+            return emails
+
         except Exception as e:
             print(f"[STORAGE] Error loading emails: {e}")
             import traceback
             traceback.print_exc()
             return []
 
-        return emails
+    def sync_emails(self, new_emails: List[Dict]) -> List[Dict]:
+        """Sync new emails with existing storage"""
+        self._update_mode()
 
-    def sync_emails(self, gmail_emails: List[Dict]) -> List[Dict]:
-        """
-        Sync Gmail emails with local storage.
-        - Marks all existing emails as not last downloaded
-        - Adds new emails from Gmail
-        - Updates existing emails if they've changed
-        - Returns the complete updated list
-        """
+        print(f"[STORAGE] sync_emails() called with {len(new_emails)} new emails")
+
+        # Load existing emails
         existing_emails = self.load_emails()
-        existing_map = {e['message_id']: e for e in existing_emails}
+        existing_ids = {e['message_id'] for e in existing_emails}
 
-        # Mark all as not last downloaded
+        # Reset is_last_downloaded flag for all existing emails
         for email in existing_emails:
             email['is_last_downloaded'] = 0
 
-        # Process Gmail emails
-        for gmail_email in gmail_emails:
-            gmail_email['is_last_downloaded'] = 1
-            message_id = gmail_email['message_id']
+        # Add new emails and save their bodies
+        newly_added = []
+        for email in new_emails:
+            if email['message_id'] not in existing_ids:
+                print(f"[STORAGE] Processing new email: {email['message_id']}")
 
-            if message_id in existing_map:
-                # Update existing email
-                existing_map[message_id].update(gmail_email)
+                # Save body to file
+                body_plain = email.pop('body_plain', '')
+                body_html = email.pop('body_html', '')
+
+                print(f"[STORAGE]   body_plain length: {len(body_plain)}")
+                print(f"[STORAGE]   body_html length: {len(body_html)}")
+
+                body_file, body_format = self.save_body_to_file(
+                    email['message_id'],
+                    body_plain,
+                    body_html
+                )
+
+                print(f"[STORAGE]   Saved to: {body_file} (format: {body_format})")
+
+                email['body_file'] = body_file
+                email['body_format'] = body_format
+                email['is_last_downloaded'] = 1
+
+                # Load body content for in-memory use (RAW - don't strip)
+                if body_file:
+                    body_html, body_plain = self.load_body_from_file_raw(body_file)
+                    email['body_html'] = body_html
+                    email['body_plain'] = body_plain
+                else:
+                    email['body_html'] = ""
+                    email['body_plain'] = ""
+
+                newly_added.append(email)
             else:
-                # Add new email
-                existing_emails.append(gmail_email)
-                existing_map[message_id] = gmail_email
+                print(f"[STORAGE] Email {email['message_id']} already exists, skipping")
+
+        # Combine all emails
+        all_emails = existing_emails + newly_added
 
         # Save to CSV
-        self._save_to_path(self.csv_path, existing_emails)
-        return existing_emails
+        self._save_to_csv(all_emails)
+
+        print(f"[STORAGE] Synced {len(newly_added)} new emails. Total: {len(all_emails)}")
+        return all_emails
 
     def save_emails(self, emails: List[Dict]) -> None:
-        """
-        Save emails to storage (respects test mode - won't save to emails_mod.csv).
-        """
-        # Re-check test mode
-        self._update_mode()
+        """Save emails to CSV (used after categorization)
 
+        Args:
+            emails: List of email dicts to save
+        """
         if self.is_test_mode():
-            print("[STORAGE] Test mode active - changes not saved to emails_mod.csv")
+            print("[STORAGE] Test mode - skipping save to prevent overwriting test data")
             return
 
-        self._save_to_path(self.csv_path, emails)
+        self._save_to_csv(emails)
         print(f"[STORAGE] Saved {len(emails)} emails to {self.csv_path}")
 
-    def _save_to_path(self, path: str, emails: List[Dict]) -> None:
-        """Internal method to save emails to a specific path"""
+    def _save_to_csv(self, emails: List[Dict]) -> None:
+        """Internal method to write emails to CSV"""
         fieldnames = [
-            'message_id', 'sender', 'sender_name', 'sender_domain', 'subject', 'datetime',
-            'attachment_count', 'attachment_names', 'mime_types', 'tag',
-            'is_last_downloaded', 'needs_more_info', 'rule_applied'
+            "message_id", "sender", "sender_name", "sender_domain",
+            "subject", "datetime", "attachment_count", "attachment_names",
+            "mime_types", "tag", "is_last_downloaded", "needs_more_info",
+            "rule_applied", "body_file", "body_format", "ai_summary"
         ]
 
         try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-
-            with open(path, 'w', encoding='utf-8', newline='') as f:
+            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
 
                 for email in emails:
                     # Convert lists to pipe-separated strings
-                    email_copy = email.copy()
-                    if isinstance(email_copy.get('attachment_names'), list):
-                        email_copy['attachment_names'] = '|'.join(email_copy['attachment_names'])
-                    if isinstance(email_copy.get('mime_types'), list):
-                        email_copy['mime_types'] = '|'.join(email_copy['mime_types'])
+                    row = {
+                        "message_id": email.get("message_id", ""),
+                        "sender": email.get("sender", ""),
+                        "sender_name": email.get("sender_name", ""),
+                        "sender_domain": email.get("sender_domain", ""),
+                        "subject": email.get("subject", ""),
+                        "datetime": email.get("datetime", ""),
+                        "attachment_count": email.get("attachment_count", 0),
+                        "attachment_names": "|".join(email.get("attachment_names", [])) if isinstance(
+                            email.get("attachment_names"), list) else email.get("attachment_names", ""),
+                        "mime_types": "|".join(email.get("mime_types", [])) if isinstance(email.get("mime_types"),
+                                                                                          list) else email.get(
+                            "mime_types", ""),
+                        "tag": email.get("tag", "----"),
+                        "is_last_downloaded": email.get("is_last_downloaded", 0),
+                        "needs_more_info": email.get("needs_more_info", 0),
+                        "rule_applied": email.get("rule_applied", ""),
+                        "body_file": email.get("body_file", ""),
+                        "body_format": email.get("body_format", ""),
+                        "ai_summary": email.get("ai_summary", "")
+                    }
+                    writer.writerow(row)
 
-                    # Ensure all fields exist with proper defaults
-                    for field in fieldnames:
-                        if field not in email_copy:
-                            if field in ['attachment_count', 'is_last_downloaded', 'needs_more_info']:
-                                email_copy[field] = 0
-                            else:
-                                email_copy[field] = ''
-
-                    writer.writerow(email_copy)
-
-            print(f"[STORAGE] Successfully wrote {len(emails)} emails to {path}")
         except Exception as e:
-            print(f"[STORAGE] Error saving to {path}: {e}")
+            print(f"[STORAGE] Error saving to CSV: {e}")
             import traceback
             traceback.print_exc()
