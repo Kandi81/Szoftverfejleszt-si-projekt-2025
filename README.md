@@ -1,19 +1,76 @@
-# Szoftverfejleszt-si-projekt-2025
+# \## Architecture (v0.4.0+)
 
-A resource mappaba masoljatok be az emailben kapott fajlokat:
-- config.py
-- credentials.json
-- token.json
+# 
 
-Fontos
-    Ezeket ne adjatok hozza a Git-hez (maradjanak piros szinuek)
-    Ha veletlen hozzaadtatok es zoldek lettek, akkor legyszives szoljatok a Scott-nak, mielott betoltitek (Commit and
-    Push) a GitHub-ba.
+# Sortify now uses a modular architecture for better maintainability:
 
-Ha a PyCharm nem telepiti automatikusan a modulokat (Ala van huzva pirossal az import modulenev):
+# 
 
-1. Nyisd meg a Terminalt
-   2. Bal also sarok, alulrol a 3. ikon (Terminal)
-3. Meg kell hogy jelenjen egy sor ami ezzel kezdodik: "(.venv) PS"
-4. Telepitsd a szukseges modulokat az alabbi paranccsal:
-   5. pip intall -r requirements.txt
+# sortify/
+
+# ├── main.py # Entry point (NEW)
+
+# ├── sortifyui.py # Legacy UI (to be refactored)
+
+# ├── utils/ # Utility functions
+
+# │ ├── resource\_utils.py
+
+# │ ├── date\_utils.py
+
+# │ └── html\_utils.py
+
+# ├── models/ # Data models
+
+# │ ├── email\_model.py
+
+# │ └── app\_state.py
+
+# ├── services/ # Service layer
+
+# │ ├── gmail\_service.py
+
+# │ ├── storage\_service.py
+
+# │ ├── gemini\_service.py
+
+# │ ├── perplexity\_service.py
+
+# │ ├── verification\_service.py
+
+# │ └── ai\_factory.py
+
+# ├── business/ # Business logic
+
+# │ └── rules\_engine.py
+
+# └── controllers/ # Controllers
+
+# ├── email\_controller.py
+
+# ├── ai\_controller.py
+
+# └── auth\_controller.py
+
+
+
+
+
+
+
+\### Running the application
+
+
+
+New modular entry point
+
+python main.py
+
+
+
+Legacy entry point (still works)
+
+python sortifyui.py
+
+undefined
+
