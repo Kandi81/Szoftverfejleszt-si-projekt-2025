@@ -875,53 +875,39 @@ detail_widgets = {
 # Keyboard shortcuts
 windowsortify.bind("<Key>", on_key_press)
 
-# Check login state and load emails on startup
-# NOTE: This is now handled by main.py, but we keep it for backward compatibility
-# if running sortifyui.py directly (legacy mode)
-if __name__ == "__main__":
-    print("[WARNING] Running sortifyui.py directly (legacy mode)")
-    print("[WARNING] Please use main.py for full modular architecture support")
-    print()
-
-    # Initialize services (legacy fallback)
-    from services import StorageService, AIServiceFactory
-    from controllers import EmailController, AIController, AuthController
-
-    # Initialize storage
-    storage_service = StorageService()
-    app_state.email_storage = storage_service
-
-    # Initialize controllers
-    auth_controller = AuthController(storage_service)
-    email_controller = EmailController(storage_service)
-    ai_controller = AIController(storage_service, ai_provider="perplexity")
-
-    # Check auto-login
-    gmail_client = auth_controller.check_auto_login()
-    if gmail_client:
-        email_controller.gmail = gmail_client
-
-    # Update UI based on auth state
-    check_initial_login_state()
-
-    # Load offline emails
-    load_offline_emails()
-
-    # Start main loop
-    windowsortify.mainloop()
-else:
-    # Running from main.py (modular mode)
-    # Controllers are injected by main.py
-    # Just initialize UI state
-    pass
-
 
 # ==================== MODULE-LEVEL INITIALIZATION ====================
-# This runs when imported by main.py
+# This is called by main.py after controller injection
 
 def initialize_ui():
-    """Initialize UI after controllers are injected by main.py"""
-    # Check login state
+    """Initialize UI after controllers are injected by main.py
+
+    This function is called by main.py after:
+    1. Services are initialized
+    2. Controllers are created
+    3. Controllers are injected into this module (sortifyui.email_controller = ...)
+
+    It performs:
+    1. Check initial login state (token.json detection)
+    2. Load offline emails from storage (CSV or test data)
+    3. Update UI state accordingly (buttons, treeview, etc.)
+
+    Raises:
+        RuntimeError: If controllers not injected (sortifyui run directly)
+    """
+    if email_controller is None:
+        raise RuntimeError(
+            "\n\n"
+            "=" * 70 + "\n"
+                       "ERROR: sortifyui.py cannot run standalone!\n"
+                       "=" * 70 + "\n\n"
+                                  "sortifyui.py requires dependency injection from main.py\n\n"
+                                  "Controllers not injected. Please run:\n\n"
+                                  "    python main.py\n\n"
+                                  "=" * 70 + "\n"
+        )
+
+    # Check login state and update UI
     check_initial_login_state()
 
     # Load offline emails
