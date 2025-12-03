@@ -81,49 +81,55 @@ Place `emails_mod.csv` in `data/` directory to enable test mode. The application
 
 ## Project Structure
 
+```
 sortify/
-├── main.py # Application entry point
-├── sortifyui.py # Main UI
-├── settings_ui.py # Settings window
-├── gmailcimke.py # Gmail label operations (future)
+├── main.py                      # Application entry point
+├── sortifyui.py                 # Main UI
+├── settings_ui.py               # Settings window
+├── gmailcimke.py                # Gmail label operations (future)
 │
-├── utils/ # Utility functions
-│ ├── date_utils.py
-│ ├── html_utils.py
-│ └── path_utils.py
+├── utils/                       # Utility functions
+│   ├── __init__.py
+│   ├── date_utils.py
+│   ├── html_utils.py
+│   └── path_utils.py
 │
-├── models/ # Data models
-│ ├── app_state.py
-│ └── email_model.py
+├── models/                      # Data models
+│   ├── __init__.py
+│   ├── app_state.py
+│   └── email_model.py
 │
-├── services/ # External services
-│ ├── storage_service.py
-│ ├── gmail_service.py
-│ ├── gemini_service.py
-│ ├── perplexity_service.py
-│ ├── ai_service_factory.py
-│ └── verification_service.py
+├── services/                    # External services
+│   ├── __init__.py
+│   ├── storage_service.py
+│   ├── gmail_service.py
+│   ├── gemini_service.py
+│   ├── perplexity_service.py
+│   ├── ai_service_factory.py
+│   └── verification_service.py
 │
-├── business/ # Business logic
-│ └── rules_engine.py
+├── business/                    # Business logic
+│   ├── __init__.py
+│   └── rules_engine.py
 │
-├── controllers/ # UI controllers
-│ ├── email_controller.py
-│ ├── ai_controller.py
-│ └── auth_controller.py
+├── controllers/                 # UI controllers
+│   ├── __init__.py
+│   ├── email_controller.py
+│   ├── ai_controller.py
+│   └── auth_controller.py
 │
-├── config/ # Configuration
-│ └── settings.ini
+├── config/                      # Configuration
+│   └── settings.ini
 │
-├── data/ # Data storage
-│ └── emails.csv
+├── data/                        # Data storage
+│   └── emails.csv
 │
-└── resource/ # API keys and credentials
-├── credentials.json
-├── token.json
-├── gemini_api_key.txt
-└── perp_api_key.txt
-
+└── resource/                    # API keys and credentials
+    ├── credentials.json
+    ├── token.json
+    ├── gemini_api_key.txt
+    └── perp_api_key.txt
+```
 
 ## Architecture
 
