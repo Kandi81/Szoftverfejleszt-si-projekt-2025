@@ -1,135 +1,347 @@
-***
+# Sortify - Email Management Tool
 
-## 🏗️ Project Structure
+Automated email categorization and management system with AI-powered summaries.
 
-<details>
-<summary><b>Click to expand full structure</b></summary>
+## Features
 
-<pre>
+- Gmail API integration for email fetching
+- Automatic email categorization with customizable rules
+- AI-powered email summaries (Gemini/Perplexity)
+- Attachment verification and security scanning
+- Hungarian-localized interface
+- Offline storage (CSV-based)
+- Test mode for development
+- HTML email rendering
+
+## Tech Stack
+
+- Python 3.10+
+- Tkinter (GUI)
+- Gmail API
+- Google Gemini AI / Perplexity AI
+- tkhtmlview (HTML rendering)
+
+## Installation
+
+### Prerequisites
+
+- Python 3.10 or higher
+- Gmail API credentials
+- AI API key (Gemini or Perplexity)
+
+### Setup
+
+1. Clone repository
+
+git clone https://github.com/yourusername/sortify.git
+cd sortify
+
+
+2. Create virtual environment
+
+python -m venv .venv
+.venv\Scripts\activate # Windows
+source .venv/bin/activate # Linux/Mac
+
+
+3. Install dependencies
+
+pip install -r requirements.txt
+
+
+4. Configure API credentials
+
+Create the following files in `resource/` directory:
+
+- `credentials.json` - Gmail OAuth credentials
+- `gemini_api_key.txt` - Gemini API key OR
+- `perp_api_key.txt` - Perplexity API key
+
+5. Configure rules
+
+Edit `config/settings.ini` to customize email categorization rules.
+
+## Usage
+
+### Run Application
+
+python main.py
+
+
+### First Run
+
+1. Click "Bejelentkezés" (Login) to authenticate with Gmail
+2. Click "Letöltés / Frissítés" (Download/Refresh) to fetch emails
+3. Emails are automatically categorized based on rules
+4. Select an email to view details and AI summary
+
+### Test Mode
+
+Place `emails_mod.csv` in `data/` directory to enable test mode. The application will use test data instead of fetching from Gmail.
+
+## Project Structure
+
 sortify/
-├── main.py                    # Application entry point
-├── sortifyui.py               # Main UI (refactored)
-├── settings_ui.py             # Settings window
+├── main.py # Application entry point
+├── sortifyui.py # Main UI
+├── settings_ui.py # Settings window
+├── gmailcimke.py # Gmail label operations (future)
 │
-├── utils/                     # Utility functions
-│   ├── __init__.py
-│   ├── date_utils.py          # Date formatting
-│   ├── html_utils.py          # HTML cleaning
-│   └── path_utils.py          # Resource paths
+├── utils/ # Utility functions
+│ ├── date_utils.py
+│ ├── html_utils.py
+│ └── path_utils.py
 │
-├── models/                    # Data models
-│   ├── __init__.py
-│   ├── app_state.py           # Application state singleton
-│   └── email_model.py         # Email data structure
+├── models/ # Data models
+│ ├── app_state.py
+│ └── email_model.py
 │
-├── services/                  # External services
-│   ├── __init__.py
-│   ├── storage_service.py     # CSV storage
-│   ├── gmail_service.py       # Gmail API client
-│   ├── gemini_service.py      # Google Gemini AI
-│   ├── perplexity_service.py  # Perplexity AI
-│   ├── ai_service_factory.py  # AI provider factory
-│   └── verification_service.py # Attachment verification
+├── services/ # External services
+│ ├── storage_service.py
+│ ├── gmail_service.py
+│ ├── gemini_service.py
+│ ├── perplexity_service.py
+│ ├── ai_service_factory.py
+│ └── verification_service.py
 │
-├── business/                  # Business logic
-│   ├── __init__.py
-│   └── rules_engine.py        # Email categorization rules
+├── business/ # Business logic
+│ └── rules_engine.py
 │
-├── controllers/               # UI controllers
-│   ├── __init__.py
-│   ├── email_controller.py    # Email operations
-│   ├── ai_controller.py       # AI operations
-│   └── auth_controller.py     # Authentication
+├── controllers/ # UI controllers
+│ ├── email_controller.py
+│ ├── ai_controller.py
+│ └── auth_controller.py
 │
-├── config/                    # Configuration
-│   └── settings.ini           # Rules and settings
+├── config/ # Configuration
+│ └── settings.ini
 │
-├── data/                      # Data storage
-│   └── emails.csv             # Email database
+├── data/ # Data storage
+│ └── emails.csv
 │
-└── resource/                  # Resources
-    ├── credentials.json       # Gmail OAuth credentials
-    ├── token.json             # Auth token (generated)
-    ├── gemini_api_key.txt     # Gemini API key
-    └── perp_api_key.txt       # Perplexity API key
-</pre>
+└── resource/ # API keys and credentials
+├── credentials.json
+├── token.json
+├── gemini_api_key.txt
+└── perp_api_key.txt
 
-</details>
 
-***
+## Architecture
 
-## 🏛️ Architecture
-
-Sortify uses a **5-layer modular architecture** for maintainability and testability.
+Sortify uses a 5-layer modular architecture for maintainability and testability.
 
 ### Layers
 
-**1. Utils Layer** - Pure utility functions (no dependencies)  
-**2. Models Layer** - Data structures and application state  
-**3. Services Layer** - External API integrations (Gmail, AI, Storage)  
-**4. Business Layer** - Business logic (rules engine, categorization)  
+**1. Utils Layer** - Pure utility functions (date formatting, HTML cleaning)
+
+**2. Models Layer** - Data structures and application state management
+
+**3. Services Layer** - External API integrations (Gmail, AI providers, Storage)
+
+**4. Business Layer** - Business logic (email categorization rules)
+
 **5. Controllers Layer** - Orchestration between UI and services
 
 ### Architecture Flow
 
 UI Layer (sortifyui.py)
-↓ uses
+↓
 Controllers Layer (email, ai, auth)
-↓ uses
-Services + Business Layer (gmail, storage, AI, rules)
-↓ uses
-Models + Utils Layer (app_state, date/html utils)
+↓
+Services + Business Layer
+↓
+Models + Utils Layer
 
-text
 
 ### Key Principles
 
-- ✅ **Dependency Injection** - Controllers injected into UI via `main.py`
-- ✅ **Single Responsibility** - Each module has one clear purpose
-- ✅ **Separation of Concerns** - UI, business logic, and services separated
-- ✅ **Testability** - Pure functions and clear interfaces
-- ✅ **Maintainability** - Easy to understand and modify
+- Dependency Injection - Controllers injected via main.py
+- Single Responsibility - One purpose per module
+- Separation of Concerns - UI, business logic, and services separated
+- Testability - Pure functions and clear interfaces
+- Maintainability - Easy to understand and modify
 
-***
+## Configuration
 
-## 📝 Migration Notes (v0.3.0 → v0.4.0)
+### Email Categorization Rules
 
-**v0.4.0** introduced a complete modular architecture refactor.
+Edit `config/settings.ini` to customize categorization:
 
-### Deprecated Modules (Removed)
+[rules.leadership]
+emails = boss@university.hu,dean@university.hu
 
-Old monolithic modules were replaced with modular equivalents:
+[rules.department]
+emails = colleague1@university.hu,colleague2@university.hu
 
-| Old Module | New Module | Location |
-|------------|------------|----------|
-| `gmailclient.py` | `GmailService` | `services/gmail_service.py` |
-| `email_storage.py` | `StorageService` | `services/storage_service.py` |
-| `rules.py` | `apply_rules` | `business/rules_engine.py` |
-| `perplexity_client.py` | `PerplexityService` | `services/perplexity_service.py` |
-| `geminiclient.py` | `GeminiService` | `services/gemini_service.py` |
-| `attachment_verifier.py` | `verify_attachments` | `services/verification_service.py` |
+[rules.neptun]
+emails = neptun@university.hu
 
-### Migration Guide
+[rules.moodle]
+emails = moodle@university.hu
 
-If you have custom code importing old modules, update as follows:
+[rules.milton]
+emails = milton@university.hu
 
-```python
-# OLD (no longer works)
-import gmailclient
-from email_storage import EmailStorage
-from rules import apply_rules
 
-# NEW (v0.4.0+)
-from services import GmailService, StorageService
-from business import apply_rules
-Entry Point Changed
-Old: Run python sortifyui.py directly
+### AI Provider
 
-### Entry Point Changed
+Set AI provider in code or via environment:
 
-- **Old:** Run `python sortifyui.py` directly
-- **New:** Run `python main.py` (recommended)
+In main.py
+ai_controller = AIController(storage_service, ai_provider="perplexity")
 
-The `main.py` entry point initializes services and injects controllers into the UI.
+or ai_provider="gemini"
 
----
+
+## Features in Detail
+
+### Email Categorization
+
+Emails are automatically categorized into:
+
+- Vezetoseg (Leadership)
+- Tanszek (Department)
+- Neptun (Student system)
+- Moodle (Learning platform)
+- Milt-On (University platform)
+- Hianyos (Incomplete/Missing info)
+
+### AI Summary
+
+Generate AI-powered summaries for individual emails:
+
+1. Select an email
+2. Click the sparkle button in details panel
+3. AI summary appears in yellow box
+
+### Attachment Verification
+
+Verify email attachments for security:
+
+1. Select an email with attachments
+2. Click "Csatolmányok ellenőrzése" button
+3. View verification results
+
+Checks for:
+- Suspicious file extensions (.exe, .scr, .bat, etc.)
+- Double extensions (.pdf.exe)
+- Mismatched MIME types
+
+### Filtering
+
+Filter emails by:
+
+- Tag/Category (click category buttons)
+- Attachments (click attachment count button)
+- Clear filters with Escape key
+
+### Keyboard Shortcuts
+
+- Ctrl+R - Refresh emails from Gmail
+- Escape - Clear active filters
+
+## Version History
+
+### v0.4.1 - Cleanup (Current)
+
+- Removed backward compatibility
+- Removed obsolete prototype files
+- Enforced main.py entry point
+- Simplified documentation
+
+### v0.4.0 - Modular Architecture
+
+Complete refactoring to 5-layer modular architecture.
+
+- 23 new modular files organized in 5 layers
+- main.py entry point with dependency injection
+- Controllers pattern for UI orchestration
+- 33% code reduction in UI layer
+- Better separation of concerns
+
+### v0.3.0 - Feature Complete
+
+- Added AI summary (Perplexity/Gemini)
+- Added attachment verification
+- Added email categorization rules
+- HTML email rendering
+- Details panel
+
+### v0.2.0 - MVP
+
+- Basic email fetching from Gmail
+- CSV storage
+- Simple categorization
+- Tkinter UI
+
+## Development
+
+### Running Tests
+
+Test mode with sample data:
+
+Place emails_mod.csv in data/ directory
+python main.py
+
+
+### Adding New Categorization Rules
+
+1. Edit `config/settings.ini`
+2. Add new section: `[rules.your_category]`
+3. Add emails: `emails = email1@domain.com,email2@domain.com`
+4. Restart application
+
+### Extending Services
+
+Add new service in `services/` directory:
+
+services/your_service.py
+class YourService:
+def init(self):
+pass
+
+text
+def your_method(self):
+    pass
+
+Import in `services/__init__.py`:
+
+from .your_service import YourService
+
+## Troubleshooting
+
+### Gmail Authentication Failed
+
+- Check `resource/credentials.json` exists
+- Delete `resource/token.json` and re-authenticate
+- Verify Gmail API is enabled in Google Cloud Console
+
+### AI Summary Not Working
+
+- Check API key file exists (gemini_api_key.txt or perp_api_key.txt)
+- Verify API key is valid
+- Check internet connection
+
+### Emails Not Loading
+
+- Verify Gmail authentication
+- Check internet connection
+- Review console output for errors
+
+## Contributing
+
+This is a university project. Contributions are welcome via pull requests.
+
+## License
+
+Educational project for Hungarian University of Economics.
+
+## Authors
+
+University student project - Business Economics program.
+
+## Acknowledgments
+
+- Gmail API documentation
+- Google Gemini AI
+- Perplexity AI
+- tkhtmlview library
