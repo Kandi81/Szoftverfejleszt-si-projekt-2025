@@ -1,0 +1,37 @@
+@"
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+*.spec
+
+# Data files
+data/
+emails.csv
+emails_mod.csv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials
+resource/token.json
+resource/gemini_api_key.txt
+resource/perp_api_key.txt
+
+# Logs
+*.log
+"@ | Out-File -FilePath .gitignore -Encoding utf8
