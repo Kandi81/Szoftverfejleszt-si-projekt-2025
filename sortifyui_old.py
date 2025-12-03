@@ -1,7 +1,7 @@
 import sys
 import os
 
-# Fix tkhtmlview compatibility
+# Fix tkhtmlview compatibility with newer Pillow versions
 from PIL import Image
 
 if not hasattr(Image, 'ANTIALIAS'):
@@ -10,36 +10,157 @@ if not hasattr(Image, 'ANTIALIAS'):
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
+from googleapiclient.errors import HttpError
+from email.utils import parseaddr
 from tkhtmlview import HTMLScrolledText
-
-# NEW: Import from modular architecture
-from models import app_state
-from utils import resource_path, format_date_hungarian, clean_html_for_display
+from datetime import datetime
+import gmailclient
+from email_storage import EmailStorage
+from rules import apply_rules
+from attachment_verifier import verify_emails_batch
+from perplexity_client import PerplexityClient
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ==================== CONTROLLER INJECTION ====================
-# These are injected by main.py
-email_controller = None
-ai_controller = None
-auth_controller = None
 
-# ==================== UI-SPECIFIC GLOBALS ====================
-# UI-specific state (not in app_state)
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # noinspection PyProtectedMember
+        base_path = sys._MEIPASS  # type: ignore
+    except AttributeError:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+# Global variables
+all_items = []
+is_filtered = False
+attachment_filter_active = False
+current_filter_label = ""
+
+categorized_counts = {
+    "vezetoseg": 0,
+    "tanszek": 0,
+    "neptun": 0,
+    "moodle": 0,
+    "milt-on": 0,
+    "hianyos": 0
+}
+categorized_items = set()
+gmail_client = None
+email_storage = EmailStorage()
+email_data_map = {}
+
+# Perplexity client (lazy initialization)
+perplexity_client = None
+
+# Sorting state
+sort_column = "Date"
+sort_reverse = True
+
+# Details panel widgets (will be initialized later)
 detail_widgets = {}
-select_all_var = None
 
 # AI icon (for treeview)
 AI_ICON = "✨"
 
 
-# ==================== UTILITY FUNCTIONS ====================
+def get_perplexity_client():
+    """Lazy initialization of Perplexity client"""
+    global perplexity_client
+    if perplexity_client is None:
+        try:
+            perplexity_client = PerplexityClient()
+            print("[PERPLEXITY] Client initialized successfully")
+        except Exception as e:
+            print(f"[PERPLEXITY] Initialization failed: {e}")
+            perplexity_client = None
+    return perplexity_client
+
+
+def format_date_hungarian(date_str: str) -> str:
+    """Format date to Hungarian format with smart today/time display
+
+    Args:
+        date_str: Date string in various formats
+
+    Returns:
+        Formatted date string (HH:MM if today, YYYY.MM.DD HH:MM otherwise)
+    """
+    if not date_str or date_str == "N/A":
+        return "N/A"
+
+    try:
+        # Try parsing RFC 2822 format (from Gmail API)
+        # Example: "Mon, 27 Oct 2025 17:38:20 GMT"
+        formats = [
+            "%a, %d %b %Y %H:%M:%S %Z",
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%d %b %Y %H:%M:%S %Z",
+            "%d %b %Y %H:%M:%S %z",
+            "%Y.%m.%d %H:%M:%S",
+            "%Y.%m.%d %H:%M",
+        ]
+
+        dt = None
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(date_str, fmt)
+                break
+            except ValueError:
+                continue
+
+        if not dt:
+            # Already in Hungarian format?
+            if date_str.count('.') == 2 and ':' in date_str:
+                return date_str
+            return date_str  # Return original if can't parse
+
+        # Check if today
+        now = datetime.now()
+        if dt.date() == now.date():
+            # Today: only show time
+            return dt.strftime("%H:%M")
+        else:
+            # Other days: full date and time
+            return dt.strftime("%Y.%m.%d %H:%M")
+
+    except Exception as e:
+        print(f"[DATE] Error formatting date '{date_str}': {e}")
+        return date_str
+
+
+def clean_html_for_display(html_content: str) -> str:
+    """Clean HTML content for tkhtmlview display
+
+    Removes problematic elements that tkhtmlview can't handle
+
+    Args:
+        html_content: Raw HTML string
+
+    Returns:
+        str: Cleaned HTML safe for tkhtmlview
+    """
+    import re
+
+    # Remove <style> blocks (including content)
+    html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove <script> blocks (security + compatibility)
+    html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove ALL inline style attributes (tkhtmlview has limited CSS support)
+    html_content = re.sub(r'\s+style="[^"]*"', '', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r"\s+style='[^']*'", '', html_content, flags=re.IGNORECASE)
+
+    return html_content
 
 def populate_tree_from_emails(emails):
-    """Populate treeview with emails"""
+    global all_items, email_data_map
     treeemails.delete(*treeemails.get_children())
-    app_state.all_tree_items.clear()
-    app_state.email_data_map.clear()
+    all_items.clear()
+    email_data_map.clear()
 
     emails.sort(key=lambda x: x.get("datetime", ""), reverse=True)
 
@@ -62,73 +183,55 @@ def populate_tree_from_emails(emails):
         # Add item with alternating row tags
         tag = 'evenrow' if idx % 2 == 0 else 'oddrow'
         item_id = treeemails.insert("", tk.END, values=values, tags=(tag,))
-        app_state.all_tree_items.append(item_id)
-        app_state.email_data_map[item_id] = e
+        all_items.append(item_id)
+        email_data_map[item_id] = e
 
 
 def update_tag_counts_from_storage(emails):
-    """Update tag button counts"""
-    app_state.update_categorized_counts()
+    global categorized_counts
+    for tag in categorized_counts:
+        categorized_counts[tag] = 0
+    for e in emails:
+        t = e.get("tag", "----")
+        if t in categorized_counts:
+            categorized_counts[t] += 1
 
-    btntagvezetosegi.config(
-        text=f"Vezetoseg ({app_state.categorized_counts['vezetoseg']})",
-        state="normal" if app_state.categorized_counts['vezetoseg'] > 0 else "disabled"
-    )
-    btntagtanszek.config(
-        text=f"Tanszék ({app_state.categorized_counts['tanszek']})",
-        state="normal" if app_state.categorized_counts['tanszek'] > 0 else "disabled"
-    )
-    btntagneptun.config(
-        text=f"Neptun ({app_state.categorized_counts['neptun']})",
-        state="normal" if app_state.categorized_counts['neptun'] > 0 else "disabled"
-    )
-    btntagmoodle.config(
-        text=f"Moodle ({app_state.categorized_counts['moodle']})",
-        state="normal" if app_state.categorized_counts['moodle'] > 0 else "disabled"
-    )
-    btntagmilton.config(
-        text=f"Milt-On ({app_state.categorized_counts['milt-on']})",
-        state="normal" if app_state.categorized_counts['milt-on'] > 0 else "disabled"
-    )
-    btntaghianyos.config(
-        text=f"Hiányos ({app_state.categorized_counts['hianyos']})",
-        state="normal" if app_state.categorized_counts['hianyos'] > 0 else "disabled"
-    )
+    btntagvezetosegi.config(text=f"Vezetoseg ({categorized_counts['vezetoseg']})",
+                            state="normal" if categorized_counts['vezetoseg'] > 0 else "disabled")
+    btntagtanszek.config(text=f"Tanszék ({categorized_counts['tanszek']})",
+                         state="normal" if categorized_counts['tanszek'] > 0 else "disabled")
+    btntagneptun.config(text=f"Neptun ({categorized_counts['neptun']})",
+                        state="normal" if categorized_counts['neptun'] > 0 else "disabled")
+    btntagmoodle.config(text=f"Moodle ({categorized_counts['moodle']})",
+                        state="normal" if categorized_counts['moodle'] > 0 else "disabled")
+    btntagmilton.config(text=f"Milt-On ({categorized_counts['milt-on']})",
+                        state="normal" if categorized_counts['milt-on'] > 0 else "disabled")
+    btntaghianyos.config(text=f"Hiányos ({categorized_counts['hianyos']})",
+                         state="normal" if categorized_counts['hianyos'] > 0 else "disabled")
 
 
 def update_attachment_button_count(emails):
-    """Update attachment button count"""
-    count = app_state.get_attachment_count()
+    count = sum(1 for e in emails if int(e.get("attachment_count", 0)) > 0)
     btnattachfilter.config(text=f"Csatolmány ({count})")
     btnattachfilter.config(state="normal" if count > 0 else "disabled")
 
 
 def load_offline_emails():
-    """Load emails from storage (called on startup)"""
-    if email_controller is None:
-        print("[ERROR] email_controller not initialized")
-        return
-
     try:
-        emails = email_controller.load_offline_emails()
-
+        emails = email_storage.load_emails()
         if not emails:
             treeemails.insert("", tk.END, values=("Feladó/Email/Tag/📎/AI/Dátum megjelenik itt", "", "", "", "", ""))
             return
+
+        apply_rules(emails)
 
         populate_tree_from_emails(emails)
         update_tag_counts_from_storage(emails)
         update_attachment_button_count(emails)
 
-        # Enable "Mind" checkbox if emails exist
+        # Enable "Mind" checkbox if emails exist (even in test mode)
         if emails:
             chkselectall.config(state="normal")
-
-        # Show test mode warning if applicable
-        if app_state.is_test_mode():
-            test_mode_label.config(
-                text="⚠ TESZT MÓD: emails_mod.csv betöltve - frissítés letiltva"
-            )
     except Exception as e:
         print(f"[ERROR] Failed to load offline emails: {e}")
         messagebox.showerror("Hiba", f"Email betöltési hiba:\n{e}")
@@ -206,7 +309,7 @@ def update_details_panel(email_data):
     attachment_count = int(email_data.get('attachment_count', 0))
     attachment_names = email_data.get('attachment_names', '')
 
-    # Parse attachment names
+    # Parse attachment names (semicolon or pipe separated, or list)
     attachments = []
     if attachment_names and isinstance(attachment_names, str):
         import re
@@ -222,12 +325,14 @@ def update_details_panel(email_data):
     # Show up to 3 attachment buttons
     max_chars = 30
     for idx, filename in enumerate(attachments[:3]):
-        # Truncate filename if too long
+        # Truncate filename if too long (preserve extension)
         if len(filename) > max_chars:
+            # Split name and extension
             if '.' in filename:
                 name_part = filename.rsplit('.', 1)[0]
                 ext_part = '.' + filename.rsplit('.', 1)[1]
-                available = max_chars - len(ext_part) - 3
+                # Truncate name part to fit
+                available = max_chars - len(ext_part) - 3  # 3 for "..."
                 display_name = name_part[:available] + "..." + ext_part
             else:
                 display_name = filename[:max_chars - 3] + "..."
@@ -247,7 +352,7 @@ def on_tree_select(_event=None):
     selected_items = treeemails.selection()
 
     # Update categorize button state
-    if selected_items and not app_state.is_filtered:
+    if selected_items and not is_filtered:
         btncategorize.config(state="normal")
     else:
         btncategorize.config(state="disabled")
@@ -255,7 +360,7 @@ def on_tree_select(_event=None):
     # Update details panel
     if len(selected_items) == 1:
         item_id = selected_items[0]
-        email_data = app_state.email_data_map.get(item_id, {})
+        email_data = email_data_map.get(item_id, {})
         update_details_panel(email_data)
     else:
         # No selection or multiple selection
@@ -264,10 +369,6 @@ def on_tree_select(_event=None):
 
 def generate_summary_for_selected_single():
     """Generate AI summary for the currently selected single email"""
-    if ai_controller is None:
-        messagebox.showerror("Hiba", "AI controller not initialized")
-        return
-
     selected_items = treeemails.selection()
 
     if len(selected_items) != 1:
@@ -276,7 +377,7 @@ def generate_summary_for_selected_single():
 
     # Get selected email
     item_id = selected_items[0]
-    email_data = app_state.email_data_map.get(item_id, {})
+    email_data = email_data_map.get(item_id, {})
 
     if not email_data:
         return
@@ -289,6 +390,14 @@ def generate_summary_for_selected_single():
         if not result:
             return
 
+    # Get Perplexity client
+    client = get_perplexity_client()
+    if client is None:
+        messagebox.showerror("Hiba",
+                             "Perplexity API nem elérhető.\n\n"
+                             "Ellenőrizze, hogy létezik-e a resource/perp_api_key.txt fájl.")
+        return
+
     # Show generating message in AI summary box
     detail_widgets['ai_summary'].config(state='normal')
     detail_widgets['ai_summary'].delete('1.0', tk.END)
@@ -296,12 +405,32 @@ def generate_summary_for_selected_single():
     detail_widgets['ai_summary'].config(state='disabled')
     windowsortify.update()
 
-    # Generate summary using controller
-    print(f"[AI] Generating summary for '{email_data.get('subject', '')}'...")
-    summary = ai_controller.generate_summary(email_data)
+    # Generate summary
+    subject = email_data.get('subject', '')
+    body_plain = email_data.get('body_plain', '')
+    body_html = email_data.get('body_html', '')
+    sender = email_data.get('sender_name', '')
 
-    if not summary:
-        summary = "[Hiba: nem sikerült összefoglalót generálni]"
+    # Use plain text or strip HTML
+    if not body_plain and body_html:
+        import re
+        body_plain = re.sub(r'<[^>]+>', '', body_html)
+
+    print(f"[PERPLEXITY] Generating summary for '{subject}'...")
+    summary = client.summarize_email(subject, body_plain, sender)
+
+    # Update email data
+    email_data['ai_summary'] = summary
+
+    # Save to storage
+    all_emails = email_storage.load_emails()
+    email_id_map = {e.get("message_id"): e for e in all_emails}
+    message_id = email_data.get('message_id')
+
+    if message_id in email_id_map:
+        email_id_map[message_id]['ai_summary'] = summary
+
+    email_storage.save_emails(all_emails)
 
     # Update details panel (without reloading tree)
     detail_widgets['ai_summary'].config(state='normal')
@@ -314,20 +443,17 @@ def generate_summary_for_selected_single():
     values[4] = AI_ICON  # AI column
     treeemails.item(item_id, values=values)
 
-    print(f"[AI] Summary generated successfully")
+    print(f"[PERPLEXITY] Summary generated successfully")
 
 
 def get_emails(_event):
-    """Fetch new emails from Gmail (using email_controller)"""
-    if email_controller is None:
-        messagebox.showerror("Hiba", "Email controller not initialized")
-        return
+    global is_filtered, categorized_items, attachment_filter_active
 
-    if not auth_controller or not auth_controller.is_authenticated():
+    if gmail_client is None:
         messagebox.showwarning("Figyelmeztetés", "Kérjük, először jelentkezzen be!")
         return
 
-    if app_state.is_test_mode():
+    if email_storage.is_test_mode():
         messagebox.showinfo("Teszt mód",
                             "Teszt adatállomány (emails_mod.csv) van betöltve.\n"
                             "Frissítés le van tiltva, hogy ne írjuk felül a teszt adatokat.")
@@ -339,27 +465,74 @@ def get_emails(_event):
     windowsortify.update()
 
     try:
-        # Progress callback
-        def update_progress(value):
-            pbaremails.config(value=value)
+        # Step 1: Fetch message list (0-10% of progress)
+        messages = gmail_client.list_inbox(query="", max_results=100)
+        pbaremails.config(value=10)
+        windowsortify.update()
+
+        gmail_emails = []
+        total = len(messages) if isinstance(messages, list) else 0
+
+        if total == 0:
+            pbaremails.config(value=100)
             windowsortify.update()
+            messagebox.showinfo("Info", "Nincs új email a postaládában.")
+            pbaremails.place_forget()
+            return
 
-        # Fetch emails using controller
-        synced_emails = email_controller.fetch_new_emails(
-            max_results=100,
-            progress_callback=update_progress
-        )
+        # Step 2: Fetch email details (10-90% of progress)
+        detail_progress_range = 80
 
-        # Refresh UI
+        for idx, msg in enumerate(messages, start=1):
+            try:
+                details = gmail_client.get_email_full_details(msg["id"])
+                name, addr = parseaddr(details.get("sender", ""))
+                domain = addr.split("@", 1)[-1] if "@" in addr else ""
+                details["sender_name"] = name or addr
+                details["sender_domain"] = domain
+                details.setdefault("mime_types", [])
+                details.setdefault("tag", "----")
+                details.setdefault("needs_more_info", 0)
+                details.setdefault("rule_applied", "")
+                gmail_emails.append(details)
+            except Exception as e:
+                print(f"Hiba az üzenet feldolgozásakor: {e}")
+                continue
+            finally:
+                progress = 10 + int((idx / total) * detail_progress_range)
+                pbaremails.config(value=progress)
+                windowsortify.update()
+
+        # Step 3: Apply rules (90-95% of progress)
+        pbaremails.config(value=90)
+        windowsortify.update()
+
+        apply_rules(gmail_emails)
+
+        pbaremails.config(value=95)
+        windowsortify.update()
+
+        # Step 4: Sync with storage and display (95-100% of progress)
+        synced_emails = email_storage.sync_emails(gmail_emails)
+
+        is_filtered = False
+        attachment_filter_active = False
+        categorized_items.clear()
+
+        populate_tree_from_emails(synced_emails)
+        update_tag_counts_from_storage(synced_emails)
+        update_attachment_button_count(synced_emails)
+
         if synced_emails:
-            populate_tree_from_emails(synced_emails)
-            update_tag_counts_from_storage(synced_emails)
-            update_attachment_button_count(synced_emails)
             chkselectall.config(state="normal")
 
         pbaremails.config(value=100)
         windowsortify.update()
 
+        messagebox.showinfo("Siker", f"{len(synced_emails)} email letöltve és szinkronizálva!")
+
+    except HttpError as e:
+        messagebox.showerror("Hiba", f"Gmail API hiba: {e}")
     except Exception as e:
         messagebox.showerror("Hiba", f"Email letöltési hiba: {e}")
     finally:
@@ -368,45 +541,61 @@ def get_emails(_event):
 
 def filter_by_tag(tag_name):
     """Filter treeview to show only items with the specified tag"""
-    if email_controller is None:
-        return
-
-    visible_items = email_controller.filter_by_tag(
-        tag_name,
-        app_state.all_tree_items,
-        treeemails
-    )
-
+    global is_filtered, current_filter_label
+    for item_id in all_items:
+        if treeemails.exists(item_id):
+            try:
+                treeemails.move(item_id, "", tk.END)
+            except tk.TclError:
+                pass
+    for item_id in all_items:
+        if treeemails.exists(item_id):
+            item_values = treeemails.item(item_id, "values")
+            if len(item_values) >= 3:
+                item_tag = item_values[2]
+                if item_tag != tag_name:
+                    treeemails.detach(item_id)
     treeemails.selection_remove(treeemails.get_children())
-    filter_status_label.config(text=f"Szűrő: {tag_name.capitalize()}")
+    is_filtered = True
+    current_filter_label = tag_name.capitalize()
+    filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
 
 
 def filter_by_attachment():
-    """Filter emails with attachments"""
-    if email_controller is None:
-        return
-
-    visible_items = email_controller.filter_by_attachment(
-        app_state.all_tree_items,
-        treeemails
-    )
-
+    global is_filtered, attachment_filter_active, current_filter_label
+    for item_id in all_items:
+        if treeemails.exists(item_id):
+            e = email_data_map.get(item_id, {})
+            if int(e.get("attachment_count", 0)) > 0:
+                try:
+                    treeemails.move(item_id, "", tk.END)
+                except tk.TclError:
+                    pass
+            else:
+                treeemails.detach(item_id)
     treeemails.selection_remove(treeemails.get_children())
-    filter_status_label.config(text="Szűrő: Csatolmány")
+    is_filtered = True
+    attachment_filter_active = True
+    current_filter_label = "Csatolmány"
+    filter_status_label.config(text=f"Szűrő: {current_filter_label}")
     btncategorize.config(state="disabled")
     btnclearfilters.place(x=919, y=636, width=80, height=40)
 
 
 def clear_filters():
-    """Clear all filters"""
-    if email_controller is None:
-        return
-
-    email_controller.clear_filters(app_state.all_tree_items, treeemails)
-
+    global is_filtered, attachment_filter_active, current_filter_label
+    for item_id in all_items:
+        if treeemails.exists(item_id):
+            try:
+                treeemails.move(item_id, "", tk.END)
+            except tk.TclError:
+                pass
     treeemails.selection_remove(treeemails.get_children())
+    is_filtered = False
+    attachment_filter_active = False
+    current_filter_label = ""
     filter_status_label.config(text="")
     btncategorize.config(state="disabled")
     btnclearfilters.place_forget()
@@ -421,17 +610,14 @@ def verify_attachments():
         return
 
     item_id = selected_items[0]
-    email_data = app_state.email_data_map.get(item_id, {})
+    email_data = email_data_map.get(item_id, {})
 
     if int(email_data.get('attachment_count', 0)) == 0:
         messagebox.showinfo("Info", "Ennek az emailnek nincs csatolmánya.")
         return
 
-    # Import verification service
-    from services import verify_attachments as verify_service
-
     # Run verification on single email
-    results = verify_service([email_data])
+    results = verify_emails_batch([email_data])
 
     # Display results
     total = results['total_attachments']
@@ -457,10 +643,6 @@ def verify_attachments():
 
 def categorize_emails():
     """Re-apply categorization rules to selected uncategorized emails"""
-    if email_controller is None:
-        messagebox.showerror("Hiba", "Email controller not initialized")
-        return
-
     # Get selected items
     selected_items = treeemails.selection()
 
@@ -469,16 +651,53 @@ def categorize_emails():
                             "Nincs kiválasztott email.\n\nVálasszon ki egy vagy több emailt a kategorizáláshoz.")
         return
 
-    # Get selected email data
-    selected_emails = [app_state.email_data_map[item] for item in selected_items if item in app_state.email_data_map]
+    # Filter to only uncategorized emails
+    uncategorized_emails = []
+    for item_id in selected_items:
+        if item_id in email_data_map:
+            email_data = email_data_map[item_id]
+            if email_data.get("tag", "----") == "----":
+                uncategorized_emails.append(email_data)
 
-    # Categorize using controller
-    count = email_controller.categorize_selected_emails(selected_emails)
+    if not uncategorized_emails:
+        messagebox.showinfo("Info",
+                            f"A kiválasztott {len(selected_items)} email már kategorizálva van.\n\n"
+                            f"Csak a '----' címkével rendelkező emailek lesznek újra kategorizálva.")
+        return
 
-    # Refresh UI if any were categorized
-    if count > 0:
-        populate_tree_from_emails(app_state.all_emails)
-        update_tag_counts_from_storage(app_state.all_emails)
+    # Apply rules
+    apply_rules(uncategorized_emails)
+
+    # Count how many were categorized
+    newly_categorized = sum(1 for email in uncategorized_emails if email.get("tag", "----") != "----")
+
+    if newly_categorized == 0:
+        messagebox.showinfo("Info",
+                            f"A kiválasztott {len(uncategorized_emails)} email nem illeszkedik egyik szabályhoz sem.\n\n"
+                            f"Ellenőrizze a config/settings.ini fájlt, vagy adja hozzá az emaileket a megfelelő szabályokhoz.")
+        return
+
+    # Save changes to storage
+    all_emails = email_storage.load_emails()
+
+    # Update the emails in the full list
+    email_id_map = {e.get("message_id"): e for e in all_emails}
+    for updated_email in uncategorized_emails:
+        msg_id = updated_email.get("message_id")
+        if msg_id in email_id_map:
+            email_id_map[msg_id].update(updated_email)
+
+    # Save back to storage
+    email_storage.save_emails(all_emails)
+
+    # Refresh UI
+    populate_tree_from_emails(all_emails)
+    update_tag_counts_from_storage(all_emails)
+
+    # Show success message
+    messagebox.showinfo("Siker",
+                        f"Kategorizálva: {newly_categorized}/{len(uncategorized_emails)} email\n\n"
+                        f"{'Az új címkék mentésre kerültek.' if not email_storage.is_test_mode() else 'Teszt mód - változások nem mentve.'}")
 
     # Clear selection after categorization
     treeemails.selection_remove(treeemails.get_children())
@@ -486,24 +705,36 @@ def categorize_emails():
 
 def sort_tree_by_column(col_name):
     """Sort TreeView by column, toggle ascending/descending"""
-    if email_controller is None:
-        return
+    global sort_column, sort_reverse
 
-    # Toggle sort direction
-    if app_state.sort_column == col_name:
-        app_state.sort_reverse = not app_state.sort_reverse
+    if sort_column == col_name:
+        sort_reverse = not sort_reverse
     else:
-        app_state.sort_column = col_name
-        app_state.sort_reverse = False
+        sort_column = col_name
+        sort_reverse = False
 
-    # Sort using controller
-    sorted_items = email_controller.sort_emails(col_name, app_state.sort_reverse)
+    items = []
+    for item_id in treeemails.get_children():
+        if item_id in email_data_map:
+            e = email_data_map[item_id]
+            items.append((item_id, e))
 
-    # Reorder treeview
-    for idx, (item_id, _) in enumerate(sorted_items):
+    if col_name == "Sender":
+        items.sort(key=lambda x: x[1].get("sender_name", "").lower(), reverse=sort_reverse)
+    elif col_name == "Subject":
+        items.sort(key=lambda x: x[1].get("subject", "").lower(), reverse=sort_reverse)
+    elif col_name == "Tag":
+        items.sort(key=lambda x: x[1].get("tag", "").lower(), reverse=sort_reverse)
+    elif col_name == "Attach":
+        items.sort(key=lambda x: int(x[1].get("attachment_count", 0)), reverse=sort_reverse)
+    elif col_name == "AI":
+        items.sort(key=lambda x: 1 if x[1].get("ai_summary") else 0, reverse=sort_reverse)
+    elif col_name == "Date":
+        items.sort(key=lambda x: x[1].get("datetime", ""), reverse=sort_reverse)
+
+    for idx, (item_id, _) in enumerate(items):
         treeemails.move(item_id, "", idx)
 
-    # Update column headers
     for col in ["Sender", "Subject", "Tag", "Attach", "AI", "Date"]:
         header_text = {
             "Sender": "Feladó",
@@ -515,14 +746,13 @@ def sort_tree_by_column(col_name):
         }[col]
 
         if col == col_name:
-            arrow = " ▼" if app_state.sort_reverse else " ▲"
+            arrow = " ▼" if sort_reverse else " ▲"
             treeemails.heading(col, text=header_text + arrow)
         else:
             treeemails.heading(col, text=header_text)
 
 
 def select_all():
-    """Select/deselect all items in treeview"""
     is_checked = select_all_var.get()
     if is_checked:
         treeemails.selection_set(treeemails.get_children())
@@ -531,7 +761,6 @@ def select_all():
 
 
 def uncheck_select_all_checkbox(_event):
-    """Uncheck select-all checkbox when manual selection"""
     select_all_var.set(False)
 
 
@@ -542,55 +771,62 @@ def open_settings():
 
 
 def update_get_emails_button_state():
-    """Update get emails button state based on auth and test mode"""
-    if auth_controller and auth_controller.can_refresh_emails():
+    if gmail_client is not None and not email_storage.is_test_mode():
         btngetmails.config(state="normal")
     else:
         btngetmails.config(state="disabled")
 
 
 def session_login():
-    """Gmail login/logout (using auth_controller)"""
-    if auth_controller is None:
-        messagebox.showerror("Hiba", "Auth controller not initialized")
-        return
+    global gmail_client
+    token_path = str(resource_path(os.path.join("resource", "token.json")))
 
     if btnsession.cget("text") == "Kijelentkezés":
-        # Logout
-        auth_controller.logout()
+        if os.path.exists(token_path):
+            os.remove(token_path)
+        gmail_client = None
         btnsession.config(text="Bejelentkezés")
         update_get_emails_button_state()
+        messagebox.showinfo("Kijelentkezés", "Sikeres kijelentkezés")
     else:
-        # Login
-        gmail_client = auth_controller.login()
-
-        if gmail_client:
-            # Update email_controller with authenticated client
-            if email_controller:
-                email_controller.gmail = gmail_client
-
+        try:
+            credentials_path = str(resource_path(os.path.join("resource", "credentials.json")))
+            gmail_client = gmailclient.GmailClient(
+                credentials_path=credentials_path,
+                token_path=token_path
+            )
+            gmail_client.authenticate()
             btnsession.config(text="Kijelentkezés")
+            update_get_emails_button_state()
+            messagebox.showinfo("Bejelentkezés", "Sikeres bejelentkezés")
+        except HttpError as e:
+            messagebox.showerror("Hiba", f"Gmail API hiba: {e}")
+            gmail_client = None
+            update_get_emails_button_state()
+        except Exception as e:
+            messagebox.showerror("Hiba", f"Bejelentkezési hiba: {e}")
+            gmail_client = None
             update_get_emails_button_state()
 
 
 def check_initial_login_state():
-    """Check if user is already logged in (called on startup)"""
-    if auth_controller is None:
-        btnsession.config(text="Bejelentkezés")
-        update_get_emails_button_state()
-        return
-
-    gmail_client = auth_controller.check_auto_login()
-
-    if gmail_client:
-        # Update email_controller with authenticated client
-        if email_controller:
-            email_controller.gmail = gmail_client
-
-        btnsession.config(text="Kijelentkezés")
+    global gmail_client
+    token_path = str(resource_path(os.path.join("resource", "token.json")))
+    if os.path.exists(token_path):
+        try:
+            credentials_path = str(resource_path(os.path.join("resource", "credentials.json")))
+            gmail_client = gmailclient.GmailClient(
+                credentials_path=credentials_path,
+                token_path=token_path
+            )
+            gmail_client.authenticate()
+            btnsession.config(text="Kijelentkezés")
+        except (HttpError, Exception) as e:
+            print(f"[ERROR] Auto-login failed: {e}")
+            gmail_client = None
+            btnsession.config(text="Bejelentkezés")
     else:
         btnsession.config(text="Bejelentkezés")
-
     update_get_emails_button_state()
 
 
@@ -598,19 +834,17 @@ def on_key_press(event):
     """Handle keyboard shortcuts"""
     # Ctrl+R: Refresh
     if event.state == 4 and event.keysym.lower() == 'r':
-        if auth_controller and auth_controller.can_refresh_emails():
+        if gmail_client and not email_storage.is_test_mode():
             get_emails(None)
     # Escape: Clear filters
     elif event.keysym == 'Escape':
-        if app_state.is_filtered:
+        if is_filtered:
             clear_filters()
 
 
-# ==================== UI SETUP ====================
-
 # Window and styles
 windowsortify = tk.Tk()
-windowsortify.title("Sortify v0.4.0")
+windowsortify.title("Sortify v0.3.0")
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1724x743")
 
@@ -790,139 +1024,102 @@ lbl_sender.place(x=10, y=10, width=60, height=25)
 lbl_sender_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w")
 lbl_sender_value.place(x=75, y=10, width=420, height=25)
 
-# Date (right side)
-lbl_date = tk.Label(framedetails, text="Dátum:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="e")
-lbl_date.place(x=500, y=10, width=60, height=25)
+# Date (right side - top corner)
+lbl_date_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#666", font=("", 9), anchor="e")
+lbl_date_value.place(x=500, y=10, width=190, height=25)
 
-lbl_date_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="e")
-lbl_date_value.place(x=565, y=10, width=125, height=25)
+# Subject (full width) - NEW Y POSITION
+lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="nw")
+lbl_subject.place(x=10, y=30, width=60, height=25)
 
-# Subject
-lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
-lbl_subject.place(x=10, y=40, width=50, height=25)
+lbl_subject_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w", wraplength=600,
+                             justify="left")
+lbl_subject_value.place(x=75, y=30, width=615, height=25)
 
-lbl_subject_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w",
-                              wraplength=620, justify="left")
-lbl_subject_value.place(x=65, y=40, width=625, height=25)
+# Tag (under date, only show if exists)
+lbl_tag_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#0066CC", font=("", 9, "italic"), anchor="e")
+lbl_tag_value.place(x=500, y=35, width=190, height=20)
 
-# Tag (left side)
-lbl_tag = tk.Label(framedetails, text="Címke:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
-lbl_tag.place(x=10, y=70, width=50, height=25)
+# AI Summary header frame with generate button - NEW Y POSITION
+frame_ai_header = tk.Frame(framedetails, bg="#F9F9F9")
+frame_ai_header.place(x=10, y=60, width=680, height=25)
 
-lbl_tag_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w")
-lbl_tag_value.place(x=65, y=70, width=200, height=25)
+lbl_ai_summary = tk.Label(frame_ai_header, text="AI Összefoglaló:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"),
+                          anchor="w")
+lbl_ai_summary.pack(side=tk.LEFT)
 
-# AI Summary section
-lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F9F9F9", fg="#333",
-                          font=("", 10, "bold"), anchor="w")
-lbl_ai_summary.place(x=10, y=100, width=120, height=25)
-
-# AI Summary generate button
-style.configure("btnaisummary.TButton", background="#E4E2E2", foreground="#000", font=("", 10))
-style.map("btnaisummary.TButton", background=[("active", "#E4E2E2")],
+# AI generate button (extra small, icon-based, centered vertically)
+style.configure("btngenerateai_small.TButton", background="#FFFACD", foreground="#000", font=("", 11), padding=(2, 1))
+style.map("btngenerateai_small.TButton", background=[("active", "#FFE4B5")],
           foreground=[("active", "#000")])
 
-btnaisummary = ttk.Button(framedetails, text="✨ Generálás", style="btnaisummary.TButton",
-                          command=generate_summary_for_selected_single)
-btnaisummary.place(x=590, y=98, width=100, height=28)
+btngenerateai_small = ttk.Button(frame_ai_header, text="✨", style="btngenerateai_small.TButton", width=2,
+                                 command=generate_summary_for_selected_single)
+btngenerateai_small.pack(side=tk.LEFT, padx=5)
 
-# AI Summary text box (read-only)
-txt_ai_summary = tk.Text(framedetails, wrap="word", bg="#FFFACD", fg="#000",
-                         font=("", 10), relief="solid", borderwidth=1, state='disabled')
-txt_ai_summary.place(x=10, y=130, width=680, height=80)
 
-# Message body section
-lbl_body = tk.Label(framedetails, text="Üzenet:", bg="#F9F9F9", fg="#333",
-                    font=("", 10, "bold"), anchor="w")
-lbl_body.place(x=10, y=220, width=80, height=25)
+# Hint label
+lbl_ai_hint = tk.Label(frame_ai_header, text="(kattints a generáláshoz)", bg="#F9F9F9", fg="#999",
+                       font=("", 8, "italic"), anchor="w")
+lbl_ai_hint.pack(side=tk.LEFT)
 
-# HTML body viewer
-html_body = HTMLScrolledText(framedetails, html="<p>Válasszon ki egy emailt.</p>")
-html_body.place(x=10, y=250, width=680, height=320)
+# AI Summary text box - NEW Y POSITION AND HEIGHT
+txt_ai_summary = tk.Text(framedetails, wrap='word', bg="#FFFACD", fg="#000", font=("", 9), height=5)
+txt_ai_summary.place(x=10, y=90, width=680, height=100)
+scroll_ai_summary = tk.Scrollbar(framedetails, command=txt_ai_summary.yview)
+txt_ai_summary.config(yscrollcommand=scroll_ai_summary.set, state='disabled')
 
-# Attachment buttons (3 buttons for first 3 attachments)
-style.configure("btnattachment.TButton", background="#E4E2E2", foreground="#000", font=("", 9))
-style.map("btnattachment.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000")])
+# Message body (HTML renderer)
+lbl_body = tk.Label(framedetails, text="Üzenet:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
+lbl_body.place(x=10, y=200, width=150, height=25)
 
-btnattachment1 = ttk.Button(framedetails, text="📎 attachment1.pdf", style="btnattachment.TButton")
-btnattachment2 = ttk.Button(framedetails, text="📎 attachment2.docx", style="btnattachment.TButton")
-btnattachment3 = ttk.Button(framedetails, text="📎 attachment3.xlsx", style="btnattachment.TButton")
+txt_body = HTMLScrolledText(framedetails, html="<p>Válasszon ki egy emailt a részletek megtekintéséhez.</p>")
+txt_body.place(x=10, y=230, width=680, height=340)
 
-# Verify attachments button
-style.configure("btnattachcheck.TButton", background="#FFD700", foreground="#000", font=("", 9, "bold"))
-style.map("btnattachcheck.TButton", background=[("active", "#FFC700")],
-          foreground=[("active", "#000")])
+# Attachment buttons (up to 3, positioned below message body)
+attachment_buttons = []
+for i in range(3):
+    btn = ttk.Button(framedetails, text=f"📎 Attachment {i + 1}", style="btngetmails.TButton")
+    attachment_buttons.append(btn)
 
-btnattachcheck = ttk.Button(framedetails, text="🔍 Csatolmányok ellenőrzése",
-                            style="btnattachcheck.TButton",
-                            command=verify_attachments)
+# "Csatolmányok ellenőrzése" button
+style.configure("btnattachcheck_detail.TButton", background="#E4E2E2", foreground="#000")
+style.map("btnattachcheck_detail.TButton", background=[("active", "#E4E2E2")],
+          foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
 
-# Store detail widgets in dictionary for easy access
+btnattachcheck_detail = ttk.Button(framedetails, text="Csatolmányok ellenőrzése",
+                                   style="btnattachcheck_detail.TButton",
+                                   command=verify_attachments)
+
+# Store detail panel widgets in global dict for easy access
 detail_widgets = {
     'sender_value': lbl_sender_value,
     'subject_value': lbl_subject_value,
     'date_value': lbl_date_value,
     'tag_value': lbl_tag_value,
     'ai_summary': txt_ai_summary,
-    'body': html_body,
-    'attachment_buttons': [btnattachment1, btnattachment2, btnattachment3],
-    'btnattachcheck': btnattachcheck
+    'body': txt_body,
+    'attachment_buttons': attachment_buttons,
+    'btnattachcheck': btnattachcheck_detail
 }
 
-# ==================== INITIALIZATION ====================
+# Initialize with empty state
+update_details_panel(None)
 
 # Keyboard shortcuts
 windowsortify.bind("<Key>", on_key_press)
 
-# Check login state and load emails on startup
-# NOTE: This is now handled by main.py, but we keep it for backward compatibility
-# if running sortifyui.py directly (legacy mode)
-if __name__ == "__main__":
-    print("[WARNING] Running sortifyui.py directly (legacy mode)")
-    print("[WARNING] Please use main.py for full modular architecture support")
-    print()
+# Initial state
+check_initial_login_state()
 
-    # Initialize services (legacy fallback)
-    from services import StorageService, AIServiceFactory
-    from controllers import EmailController, AIController, AuthController
-
-    # Initialize storage
-    storage_service = StorageService()
-    app_state.email_storage = storage_service
-
-    # Initialize controllers
-    auth_controller = AuthController(storage_service)
-    email_controller = EmailController(storage_service)
-    ai_controller = AIController(storage_service, ai_provider="perplexity")
-
-    # Check auto-login
-    gmail_client = auth_controller.check_auto_login()
-    if gmail_client:
-        email_controller.gmail = gmail_client
-
-    # Update UI based on auth state
-    check_initial_login_state()
-
-    # Load offline emails
-    load_offline_emails()
-
-    # Start main loop
-    windowsortify.mainloop()
+# Update UI based on test mode
+if email_storage.is_test_mode():
+    test_mode_label.config(text="Teszt mód: emails_mod.csv van betöltve. A frissítés le van tiltva.")
+    btngetmails.config(state="disabled")
 else:
-    # Running from main.py (modular mode)
-    # Controllers are injected by main.py
-    # Just initialize UI state
-    pass
+    test_mode_label.config(text="")
+    update_get_emails_button_state()
 
+load_offline_emails()
 
-# ==================== MODULE-LEVEL INITIALIZATION ====================
-# This runs when imported by main.py
-
-def initialize_ui():
-    """Initialize UI after controllers are injected by main.py"""
-    # Check login state
-    check_initial_login_state()
-
-    # Load offline emails
-    load_offline_emails()
+windowsortify.mainloop()
