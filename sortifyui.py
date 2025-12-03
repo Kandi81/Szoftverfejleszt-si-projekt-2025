@@ -1,18 +1,24 @@
 import sys
 import os
-# Fix tkhtmlview compatibility with newer Pillow
-import html_renderer_fix  # noqa: F401
+
+# Fix tkhtmlview compatibility with newer Pillow versions
+from PIL import Image
+
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.LANCZOS
+
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from googleapiclient.errors import HttpError
 from email.utils import parseaddr
-from tkhtmlview import HTMLScrolledText  # NEW IMPORT
+from tkhtmlview import HTMLScrolledText
+from datetime import datetime
 import gmailclient
 from email_storage import EmailStorage
 from rules import apply_rules
 from attachment_verifier import verify_emails_batch
-
+from perplexity_client import PerplexityClient
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -46,6 +52,9 @@ gmail_client = None
 email_storage = EmailStorage()
 email_data_map = {}
 
+# Perplexity client (lazy initialization)
+perplexity_client = None
+
 # Sorting state
 sort_column = "Date"
 sort_reverse = True
@@ -53,6 +62,99 @@ sort_reverse = True
 # Details panel widgets (will be initialized later)
 detail_widgets = {}
 
+# AI icon (for treeview)
+AI_ICON = "✨"
+
+
+def get_perplexity_client():
+    """Lazy initialization of Perplexity client"""
+    global perplexity_client
+    if perplexity_client is None:
+        try:
+            perplexity_client = PerplexityClient()
+            print("[PERPLEXITY] Client initialized successfully")
+        except Exception as e:
+            print(f"[PERPLEXITY] Initialization failed: {e}")
+            perplexity_client = None
+    return perplexity_client
+
+
+def format_date_hungarian(date_str: str) -> str:
+    """Format date to Hungarian format with smart today/time display
+
+    Args:
+        date_str: Date string in various formats
+
+    Returns:
+        Formatted date string (HH:MM if today, YYYY.MM.DD HH:MM otherwise)
+    """
+    if not date_str or date_str == "N/A":
+        return "N/A"
+
+    try:
+        # Try parsing RFC 2822 format (from Gmail API)
+        # Example: "Mon, 27 Oct 2025 17:38:20 GMT"
+        formats = [
+            "%a, %d %b %Y %H:%M:%S %Z",
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%d %b %Y %H:%M:%S %Z",
+            "%d %b %Y %H:%M:%S %z",
+            "%Y.%m.%d %H:%M:%S",
+            "%Y.%m.%d %H:%M",
+        ]
+
+        dt = None
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(date_str, fmt)
+                break
+            except ValueError:
+                continue
+
+        if not dt:
+            # Already in Hungarian format?
+            if date_str.count('.') == 2 and ':' in date_str:
+                return date_str
+            return date_str  # Return original if can't parse
+
+        # Check if today
+        now = datetime.now()
+        if dt.date() == now.date():
+            # Today: only show time
+            return dt.strftime("%H:%M")
+        else:
+            # Other days: full date and time
+            return dt.strftime("%Y.%m.%d %H:%M")
+
+    except Exception as e:
+        print(f"[DATE] Error formatting date '{date_str}': {e}")
+        return date_str
+
+
+def clean_html_for_display(html_content: str) -> str:
+    """Clean HTML content for tkhtmlview display
+
+    Removes problematic elements that tkhtmlview can't handle
+
+    Args:
+        html_content: Raw HTML string
+
+    Returns:
+        str: Cleaned HTML safe for tkhtmlview
+    """
+    import re
+
+    # Remove <style> blocks (including content)
+    html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove <script> blocks (security + compatibility)
+    html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove ALL inline style attributes (tkhtmlview has limited CSS support)
+    html_content = re.sub(r'\s+style="[^"]*"', '', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r"\s+style='[^']*'", '', html_content, flags=re.IGNORECASE)
+
+    return html_content
 
 def populate_tree_from_emails(emails):
     global all_items, email_data_map
@@ -62,15 +164,25 @@ def populate_tree_from_emails(emails):
 
     emails.sort(key=lambda x: x.get("datetime", ""), reverse=True)
 
-    for e in emails:
+    for idx, e in enumerate(emails):
+        # Format date
+        formatted_date = format_date_hungarian(e.get("datetime", "N/A"))
+
+        # AI indicator
+        ai_indicator = AI_ICON if e.get('ai_summary') else ""
+
         values = (
             e.get("sender_name", ""),
             e.get("subject", "(no subject)"),
             e.get("tag", "----"),
             e.get("attachment_count", 0),
-            e.get("datetime", "N/A"),
+            ai_indicator,
+            formatted_date,
         )
-        item_id = treeemails.insert("", tk.END, values=values)
+
+        # Add item with alternating row tags
+        tag = 'evenrow' if idx % 2 == 0 else 'oddrow'
+        item_id = treeemails.insert("", tk.END, values=values, tags=(tag,))
         all_items.append(item_id)
         email_data_map[item_id] = e
 
@@ -108,7 +220,7 @@ def load_offline_emails():
     try:
         emails = email_storage.load_emails()
         if not emails:
-            treeemails.insert("", tk.END, values=("Feladó/Email/Tag/📎/Dátum megjelenik itt", "", "", "", ""))
+            treeemails.insert("", tk.END, values=("Feladó/Email/Tag/📎/AI/Dátum megjelenik itt", "", "", "", "", ""))
             return
 
         apply_rules(emails)
@@ -137,7 +249,7 @@ def update_details_panel(email_data):
         detail_widgets['ai_summary'].delete('1.0', tk.END)
         detail_widgets['ai_summary'].config(state='disabled')
         detail_widgets['body'].set_html(
-            '<p style="color: #999;">Válasszon ki egy emailt a részletek megtekintéséhez.</p>')  # CHANGED
+            '<p style="color: #999;">Válasszon ki egy emailt a részletek megtekintéséhez.</p>')
 
         # Hide all attachment buttons
         for btn in detail_widgets['attachment_buttons']:
@@ -157,30 +269,41 @@ def update_details_panel(email_data):
     else:
         detail_widgets['tag_value'].config(text="")
 
-    # AI Summary (placeholder for now - will be loaded from CSV later)
+    # AI Summary
     ai_summary = email_data.get('ai_summary', '')
     detail_widgets['ai_summary'].config(state='normal')
     detail_widgets['ai_summary'].delete('1.0', tk.END)
     if ai_summary:
         detail_widgets['ai_summary'].insert('1.0', ai_summary)
     else:
-        detail_widgets['ai_summary'].insert('1.0', '[AI összefoglaló itt jelenik meg a későbbiekben]')
+        detail_widgets['ai_summary'].insert('1.0', '[Még nincs AI összefoglaló - kattints a ✨ gombra a generáláshoz]')
     detail_widgets['ai_summary'].config(state='disabled')
 
-    # Message body (HTML rendered)
+    # Message body (HTML rendered with cleanup)
     body_html = email_data.get('body_html', '')
     body_plain = email_data.get('body_plain', '')
 
-    if body_html:
-        # Use HTML version with full formatting
-        detail_widgets['body'].set_html(body_html)
-    elif body_plain:
-        # Fallback to plain text wrapped in <pre> tag
-        escaped_plain = body_plain.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        detail_widgets['body'].set_html(
-            f'<pre style="font-family: Arial; font-size: 12px; white-space: pre-wrap;">{escaped_plain}</pre>')
-    else:
-        detail_widgets['body'].set_html('<p style="color: #999;">Nincs üzenet törzs.</p>')
+    try:
+        if body_html:
+            # Clean HTML before rendering
+            cleaned_html = clean_html_for_display(body_html)
+            detail_widgets['body'].set_html(cleaned_html)
+        elif body_plain:
+            # Fallback to plain text wrapped in <pre> tag
+            escaped_plain = body_plain.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            detail_widgets['body'].set_html(
+                f'<pre style="font-family: Arial; font-size: 12px; white-space: pre-wrap;">{escaped_plain}</pre>')
+        else:
+            detail_widgets['body'].set_html('<p style="color: #999;">Nincs üzenet törzs.</p>')
+    except Exception as e:
+        print(f"[ERROR] Failed to render HTML body: {e}")
+        # Fallback to plain text if HTML rendering fails
+        if body_plain:
+            escaped_plain = body_plain.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            detail_widgets['body'].set_html(
+                f'<pre style="font-family: Arial; font-size: 12px;">{escaped_plain[:1000]}</pre>')
+        else:
+            detail_widgets['body'].set_html('<p style="color: red;">Hiba az email megjelenítése során.</p>')
 
     # Attachments
     attachment_count = int(email_data.get('attachment_count', 0))
@@ -244,6 +367,85 @@ def on_tree_select(_event=None):
         update_details_panel(None)
 
 
+def generate_summary_for_selected_single():
+    """Generate AI summary for the currently selected single email"""
+    selected_items = treeemails.selection()
+
+    if len(selected_items) != 1:
+        messagebox.showinfo("Info", "Válasszon ki pontosan egy emailt az AI összefoglaló generálásához.")
+        return
+
+    # Get selected email
+    item_id = selected_items[0]
+    email_data = email_data_map.get(item_id, {})
+
+    if not email_data:
+        return
+
+    # Check if already has summary
+    if email_data.get('ai_summary'):
+        result = messagebox.askyesno("Megerősítés",
+                                     "Ez az email már rendelkezik AI összefoglalóval.\n\n"
+                                     "Újra generálod?")
+        if not result:
+            return
+
+    # Get Perplexity client
+    client = get_perplexity_client()
+    if client is None:
+        messagebox.showerror("Hiba",
+                             "Perplexity API nem elérhető.\n\n"
+                             "Ellenőrizze, hogy létezik-e a resource/perp_api_key.txt fájl.")
+        return
+
+    # Show generating message in AI summary box
+    detail_widgets['ai_summary'].config(state='normal')
+    detail_widgets['ai_summary'].delete('1.0', tk.END)
+    detail_widgets['ai_summary'].insert('1.0', '⏳ Összefoglaló generálása folyamatban...')
+    detail_widgets['ai_summary'].config(state='disabled')
+    windowsortify.update()
+
+    # Generate summary
+    subject = email_data.get('subject', '')
+    body_plain = email_data.get('body_plain', '')
+    body_html = email_data.get('body_html', '')
+    sender = email_data.get('sender_name', '')
+
+    # Use plain text or strip HTML
+    if not body_plain and body_html:
+        import re
+        body_plain = re.sub(r'<[^>]+>', '', body_html)
+
+    print(f"[PERPLEXITY] Generating summary for '{subject}'...")
+    summary = client.summarize_email(subject, body_plain, sender)
+
+    # Update email data
+    email_data['ai_summary'] = summary
+
+    # Save to storage
+    all_emails = email_storage.load_emails()
+    email_id_map = {e.get("message_id"): e for e in all_emails}
+    message_id = email_data.get('message_id')
+
+    if message_id in email_id_map:
+        email_id_map[message_id]['ai_summary'] = summary
+
+    email_storage.save_emails(all_emails)
+
+    # Update details panel (without reloading tree)
+    detail_widgets['ai_summary'].config(state='normal')
+    detail_widgets['ai_summary'].delete('1.0', tk.END)
+    detail_widgets['ai_summary'].insert('1.0', summary)
+    detail_widgets['ai_summary'].config(state='disabled')
+
+    # Update treeview item to show AI icon
+    values = list(treeemails.item(item_id, 'values'))
+    values[4] = AI_ICON  # AI column
+    treeemails.item(item_id, values=values)
+
+    print(f"[PERPLEXITY] Summary generated successfully")
+
+
 def get_emails(_event):
     global is_filtered, categorized_items, attachment_filter_active
 
@@ -284,12 +486,6 @@ def get_emails(_event):
         for idx, msg in enumerate(messages, start=1):
             try:
                 details = gmail_client.get_email_full_details(msg["id"])
-
-                # DEBUG: Check if body was fetched
-                print(f"[DEBUG] Email {idx}: message_id={details.get('message_id', 'N/A')}")
-                print(f"[DEBUG]   body_plain length: {len(details.get('body_plain', ''))}")
-                print(f"[DEBUG]   body_html length: {len(details.get('body_html', ''))}")
-
                 name, addr = parseaddr(details.get("sender", ""))
                 domain = addr.split("@", 1)[-1] if "@" in addr else ""
                 details["sender_name"] = name or addr
@@ -301,9 +497,11 @@ def get_emails(_event):
                 gmail_emails.append(details)
             except Exception as e:
                 print(f"Hiba az üzenet feldolgozásakor: {e}")
-                import traceback
-                traceback.print_exc()
                 continue
+            finally:
+                progress = 10 + int((idx / total) * detail_progress_range)
+                pbaremails.config(value=progress)
+                windowsortify.update()
 
         # Step 3: Apply rules (90-95% of progress)
         pbaremails.config(value=90)
@@ -529,18 +727,21 @@ def sort_tree_by_column(col_name):
         items.sort(key=lambda x: x[1].get("tag", "").lower(), reverse=sort_reverse)
     elif col_name == "Attach":
         items.sort(key=lambda x: int(x[1].get("attachment_count", 0)), reverse=sort_reverse)
+    elif col_name == "AI":
+        items.sort(key=lambda x: 1 if x[1].get("ai_summary") else 0, reverse=sort_reverse)
     elif col_name == "Date":
         items.sort(key=lambda x: x[1].get("datetime", ""), reverse=sort_reverse)
 
     for idx, (item_id, _) in enumerate(items):
         treeemails.move(item_id, "", idx)
 
-    for col in ["Sender", "Subject", "Tag", "Attach", "Date"]:
+    for col in ["Sender", "Subject", "Tag", "Attach", "AI", "Date"]:
         header_text = {
             "Sender": "Feladó",
             "Subject": "Email",
             "Tag": "Cimke",
             "Attach": attach_header,
+            "AI": "✨",
             "Date": "Dátum"
         }[col]
 
@@ -645,7 +846,7 @@ def on_key_press(event):
 windowsortify = tk.Tk()
 windowsortify.title("Sortify v0.3.0")
 windowsortify.config(bg="#E4E2E2")
-windowsortify.geometry("1724x743")  # Expanded width: 1024 + 700
+windowsortify.geometry("1724x743")
 
 style = ttk.Style(windowsortify)
 style.theme_use("clam")
@@ -677,7 +878,7 @@ style.configure("btngetmails.TButton", background="#E4E2E2", foreground="#000")
 style.map("btngetmails.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
 
-btngetmails = ttk.Button(master=frameactionbar, text="Letoltes / Frissítés", style="btngetmails.TButton",
+btngetmails = ttk.Button(master=frameactionbar, text="Letöltés / Frissítés", style="btngetmails.TButton",
                          state="disabled")
 btngetmails.bind("<Button-1>", get_emails)
 btngetmails.place(x=10, y=9, width=140, height=40)
@@ -697,7 +898,7 @@ style.map("btnsettings.TButton", background=[("active", "#E4E2E2")],
 
 btnsettings = ttk.Button(master=frameactionbar, text="⚙", style="btnsettings.TButton",
                          command=open_settings)
-btnsettings.place(x=1565, y=9, width=40, height=40)  # Right aligned
+btnsettings.place(x=1565, y=9, width=40, height=40)
 
 # Login/Logout button - right aligned
 style.configure("btnsession.TButton", background="#E4E2E2", foreground="#000")
@@ -706,7 +907,7 @@ style.map("btnsession.TButton", background=[("active", "#E4E2E2")],
 
 btnsession = ttk.Button(master=frameactionbar, text="Bejelentkezés", style="btnsession.TButton",
                         command=session_login)
-btnsession.place(x=1609, y=9, width=90, height=40)  # Right aligned
+btnsession.place(x=1609, y=9, width=90, height=40)
 
 # Tag buttons (bottom of left panel)
 style.configure("btntagvezetosegi.TButton", background="#E4E2E2", foreground="#000")
@@ -760,15 +961,20 @@ pbaremails = ttk.Progressbar(master=frameactionbar,
                              value=0)
 pbaremails.config(orient="horizontal", mode="determinate", length=200)
 
-# Tree styles and widget
+# Tree styles and widget with banded rows
 style.configure("treeemails.Treeview.Heading", background="#E0E0E0", foreground="#000000")
-style.configure("treeemails.Treeview", background="#E4E2E2", foreground="#000", font=("", 12))
+style.configure("treeemails.Treeview", background="#FFFFFF", foreground="#000", font=("", 12))
+style.map("treeemails.Treeview", background=[("selected", "#0078D7")])
 
 treeemails = ttk.Treeview(master=framemain, selectmode="extended", style="treeemails.Treeview")
-treeemails.config(columns=("Sender", "Subject", "Tag", "Attach", "Date"), show='headings')
+treeemails.config(columns=("Sender", "Subject", "Tag", "Attach", "AI", "Date"), show='headings')
 treeemails.bind("<Button-1>", uncheck_select_all_checkbox)
-treeemails.bind("<<TreeviewSelect>>", on_tree_select)  # Updated binding
+treeemails.bind("<<TreeviewSelect>>", on_tree_select)
 treeemails.place(x=9, y=20, width=991, height=606)
+
+# Configure alternating row colors (banded rows)
+treeemails.tag_configure('oddrow', background='#FFFFFF')
+treeemails.tag_configure('evenrow', background='#F5F5F5')
 
 attach_header = "📎"
 try:
@@ -780,13 +986,15 @@ treeemails.heading("Sender", text="Feladó", command=lambda: sort_tree_by_column
 treeemails.heading("Subject", text="Email", command=lambda: sort_tree_by_column("Subject"))
 treeemails.heading("Tag", text="Cimke", command=lambda: sort_tree_by_column("Tag"))
 treeemails.heading("Attach", text=attach_header, command=lambda: sort_tree_by_column("Attach"))
+treeemails.heading("AI", text="✨", command=lambda: sort_tree_by_column("AI"))
 treeemails.heading("Date", text="Dátum", command=lambda: sort_tree_by_column("Date"))
 
 treeemails.column("Sender", anchor="w", width=180)
 treeemails.column("Subject", anchor="w", width=420)
 treeemails.column("Tag", anchor="w", width=100)
-treeemails.column("Attach", anchor="center", width=70)
-treeemails.column("Date", anchor="center", width=180)
+treeemails.column("Attach", anchor="center", width=40)
+treeemails.column("AI", anchor="center", width=40)
+treeemails.column("Date", anchor="center", width=170)
 
 # Select-all checkbox
 style.configure("chkselectall.TCheckbutton", background="#EDECEC", foreground="#000")
@@ -820,25 +1028,44 @@ lbl_sender_value.place(x=75, y=10, width=420, height=25)
 lbl_date_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#666", font=("", 9), anchor="e")
 lbl_date_value.place(x=500, y=10, width=190, height=25)
 
-# Subject (full width)
+# Subject (full width) - NEW Y POSITION
 lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="nw")
-lbl_subject.place(x=10, y=45, width=60, height=25)
+lbl_subject.place(x=10, y=30, width=60, height=25)
 
 lbl_subject_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w", wraplength=600,
                              justify="left")
-lbl_subject_value.place(x=75, y=45, width=615, height=25)  # Your adjusted coordinates
+lbl_subject_value.place(x=75, y=30, width=615, height=25)
 
 # Tag (under date, only show if exists)
 lbl_tag_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#0066CC", font=("", 9, "italic"), anchor="e")
 lbl_tag_value.place(x=500, y=35, width=190, height=20)
 
-# AI Summary box (where attachments used to be)
-lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"),
-                          anchor="w")
-lbl_ai_summary.place(x=10, y=90, width=150, height=25)
+# AI Summary header frame with generate button - NEW Y POSITION
+frame_ai_header = tk.Frame(framedetails, bg="#F9F9F9")
+frame_ai_header.place(x=10, y=60, width=680, height=25)
 
-txt_ai_summary = tk.Text(framedetails, wrap='word', bg="#FFFACD", fg="#000", font=("", 9), height=3)
-txt_ai_summary.place(x=10, y=120, width=680, height=70)
+lbl_ai_summary = tk.Label(frame_ai_header, text="AI Összefoglaló:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"),
+                          anchor="w")
+lbl_ai_summary.pack(side=tk.LEFT)
+
+# AI generate button (extra small, icon-based, centered vertically)
+style.configure("btngenerateai_small.TButton", background="#FFFACD", foreground="#000", font=("", 11), padding=(2, 1))
+style.map("btngenerateai_small.TButton", background=[("active", "#FFE4B5")],
+          foreground=[("active", "#000")])
+
+btngenerateai_small = ttk.Button(frame_ai_header, text="✨", style="btngenerateai_small.TButton", width=2,
+                                 command=generate_summary_for_selected_single)
+btngenerateai_small.pack(side=tk.LEFT, padx=5)
+
+
+# Hint label
+lbl_ai_hint = tk.Label(frame_ai_header, text="(kattints a generáláshoz)", bg="#F9F9F9", fg="#999",
+                       font=("", 8, "italic"), anchor="w")
+lbl_ai_hint.pack(side=tk.LEFT)
+
+# AI Summary text box - NEW Y POSITION AND HEIGHT
+txt_ai_summary = tk.Text(framedetails, wrap='word', bg="#FFFACD", fg="#000", font=("", 9), height=5)
+txt_ai_summary.place(x=10, y=90, width=680, height=100)
 scroll_ai_summary = tk.Scrollbar(framedetails, command=txt_ai_summary.yview)
 txt_ai_summary.config(yscrollcommand=scroll_ai_summary.set, state='disabled')
 
@@ -849,14 +1076,13 @@ lbl_body.place(x=10, y=200, width=150, height=25)
 txt_body = HTMLScrolledText(framedetails, html="<p>Válasszon ki egy emailt a részletek megtekintéséhez.</p>")
 txt_body.place(x=10, y=230, width=680, height=340)
 
-
 # Attachment buttons (up to 3, positioned below message body)
 attachment_buttons = []
 for i in range(3):
     btn = ttk.Button(framedetails, text=f"📎 Attachment {i + 1}", style="btngetmails.TButton")
     attachment_buttons.append(btn)
 
-# "Csatolmányok ellenőrzése" button (positioned next to attachments)
+# "Csatolmányok ellenőrzése" button
 style.configure("btnattachcheck_detail.TButton", background="#E4E2E2", foreground="#000")
 style.map("btnattachcheck_detail.TButton", background=[("active", "#E4E2E2")],
           foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
