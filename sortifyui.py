@@ -141,7 +141,7 @@ def update_details_panel(email_data):
         detail_widgets['sender_value'].config(text="")
         detail_widgets['subject_value'].config(text="")
         detail_widgets['date_value'].config(text="")
-        detail_widgets['tag_value'].config(text="")
+        detail_widgets['tag_var'].set("")  # Clear dropdown
         detail_widgets['ai_summary'].config(state='normal')
         detail_widgets['ai_summary'].delete('1.0', tk.END)
         detail_widgets['ai_summary'].config(state='disabled')
@@ -159,12 +159,25 @@ def update_details_panel(email_data):
     detail_widgets['subject_value'].config(text=email_data.get('subject', '(no subject)'))
     detail_widgets['date_value'].config(text=email_data.get('datetime', 'N/A'))
 
-    # Tag (only show if exists and not '----')
+    # Tag dropdown - set current value
     tag = email_data.get('tag', '----')
     if tag and tag != '----':
-        detail_widgets['tag_value'].config(text=tag)
+        # Capitalize first letter to match dropdown values
+        tag_display = tag.capitalize()
+
+        # Map storage values to display values
+        tag_map = {
+            'vezetoseg': 'Vezetőség',
+            'tanszek': 'Tanszék',
+            'neptun': 'Neptun',
+            'moodle': 'Moodle',
+            'milt-on': 'Milt-On',
+            'hianyos': 'Hiányos'
+        }
+        tag_display = tag_map.get(tag.lower(), tag_display)
+        detail_widgets['tag_var'].set(tag_display)
     else:
-        detail_widgets['tag_value'].config(text="")
+        detail_widgets['tag_var'].set("")
 
     # AI Summary
     ai_summary = email_data.get('ai_summary', '')
@@ -610,7 +623,7 @@ def on_key_press(event):
 
 # Window and styles
 windowsortify = tk.Tk()
-windowsortify.title("Sortify v0.4.0")
+windowsortify.title("Sortify v0.4.1")
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1724x743")
 
@@ -625,12 +638,12 @@ frameactionbar.place(x=8, y=0, width=1710, height=55)
 # Main frame (left side - treeview)
 framemain = tk.Frame(master=windowsortify)
 framemain.config(bg="#EDECEC")
-framemain.place(x=5, y=59, width=1011, height=686)
+framemain.place(x=5, y=59, width=1011, height=680)
 
 # Details frame (right side - email details)
-framedetails = tk.Frame(master=windowsortify)
-framedetails.config(bg="#F9F9F9")
-framedetails.place(x=1020, y=59, width=700, height=686)
+framedetails = tk.Frame(master=windowsortify, relief=tk.GROOVE, borderwidth=2)
+framedetails.config(bg="#F5F5F5")
+framedetails.place(x=1020, y=59, width=700, height=680)
 
 test_mode_label = tk.Label(master=framemain,
                            text="",
@@ -684,7 +697,7 @@ btntagvezetosegi.place(x=9, y=636, width=120, height=40)
 style.configure("btntagtanszek.TButton", background="#E4E2E2", foreground="#000")
 btntagtanszek = ttk.Button(master=framemain, text="Tanszék (0)", style="btntagtanszek.TButton",
                            state="disabled", command=lambda: filter_by_tag("tanszek"))
-btntagtanszek.place(x=139, y=636, width=120, height=40)
+btntagtanszek.place(x=139, y=636, width=90, height=30)
 
 style.configure("btntagneptun.TButton", background="#E4E2E2", foreground="#000")
 btntagneptun = ttk.Button(master=framemain, text="Neptun (0)", style="btntagneptun.TButton",
@@ -784,38 +797,91 @@ filter_status_label.place(x=770, y=14, width=95, height=30)
 # ==================== DETAILS PANEL ====================
 
 # Sender (left side)
-lbl_sender = tk.Label(framedetails, text="Feladó:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
+lbl_sender = tk.Label(framedetails, text="Feladó:", bg="#F5F5F5", fg="#333", font=("", 10, "bold"), anchor="w")
 lbl_sender.place(x=10, y=10, width=60, height=25)
 
-lbl_sender_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w")
-lbl_sender_value.place(x=75, y=10, width=420, height=25)
+lbl_sender_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#000", font=("", 10), anchor="w")
+lbl_sender_value.place(x=75, y=10, width=410, height=25)
 
-# Date (right side)
-lbl_date = tk.Label(framedetails, text="Dátum:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="e")
-lbl_date.place(x=500, y=10, width=60, height=25)
-
-lbl_date_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="e")
-lbl_date_value.place(x=565, y=10, width=125, height=25)
+# Date (right side) - NO "Dátum:" label
+lbl_date_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#666", font=("", 9, "italic"), anchor="e")
+lbl_date_value.place(x=490, y=10, width=195, height=25)
 
 # Subject
-lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
+lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F5F5F5", fg="#333", font=("", 10, "bold"), anchor="w")
 lbl_subject.place(x=10, y=40, width=50, height=25)
 
-lbl_subject_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w",
+lbl_subject_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#000", font=("", 10), anchor="w",
                               wraplength=620, justify="left")
-lbl_subject_value.place(x=65, y=40, width=625, height=25)
+lbl_subject_value.place(x=65, y=40, width=620, height=25)
 
-# Tag (left side)
-lbl_tag = tk.Label(framedetails, text="Címke:", bg="#F9F9F9", fg="#333", font=("", 10, "bold"), anchor="w")
-lbl_tag.place(x=10, y=70, width=50, height=25)
+# Tag dropdown (moved under date, right side) - NO "Címke:" label
 
-lbl_tag_value = tk.Label(framedetails, text="", bg="#F9F9F9", fg="#000", font=("", 10), anchor="w")
-lbl_tag_value.place(x=65, y=70, width=200, height=25)
+tag_categories = ["Vezetőség", "Tanszék", "Neptun", "Moodle", "Milt-On", "Hiányos"]
+tag_var = tk.StringVar()
+tag_dropdown = ttk.Combobox(
+    framedetails,
+    textvariable=tag_var,
+    values=tag_categories,
+    state="readonly",
+    font=("", 9),
+    width=20
+)
+tag_dropdown.place(x=555, y=40, width=130, height=22)
 
-# AI Summary section
-lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F9F9F9", fg="#333",
+
+# Tag dropdown event handler
+def on_tag_dropdown_change(event):
+    """Handle tag dropdown selection change - auto-save to CSV"""
+    selected_items = treeemails.selection()
+    if not selected_items or len(selected_items) != 1:
+        return
+
+    item_id = selected_items[0]
+    email_data = app_state.email_data_map.get(item_id)
+    if not email_data:
+        return
+
+    new_tag = tag_var.get()
+    if not new_tag:
+        return
+
+    # Normalize tag (lowercase for storage)
+    tag_map_reverse = {
+        'Vezetőség': 'vezetoseg',
+        'Tanszék': 'tanszek',
+        'Neptun': 'neptun',
+        'Moodle': 'moodle',
+        'Milt-On': 'milt-on',
+        'Hiányos': 'hianyos'
+    }
+    tag_normalized = tag_map_reverse.get(new_tag, new_tag.lower())
+
+    # Update email data
+    email_data['tag'] = tag_normalized
+
+    # Save to CSV using controller
+    if email_controller:
+        # Save entire email list (includes updated tag)
+        email_controller.storage.save_emails(list(app_state.email_data_map.values()))
+
+        # Update treeview
+        current_values = list(treeemails.item(item_id, 'values'))
+        current_values[2] = tag_normalized  # Tag column is index 2
+        treeemails.item(item_id, values=current_values)
+
+        # Update tag counts
+        update_tag_counts_from_storage(list(app_state.email_data_map.values()))
+
+        print(f"[INFO] Tag updated: {email_data.get('subject', '')} → {tag_normalized}")
+
+
+tag_dropdown.bind("<<ComboboxSelected>>", on_tag_dropdown_change)
+
+# AI Summary section (moved up by 30px)
+lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F5F5F5", fg="#333",
                           font=("", 10, "bold"), anchor="w")
-lbl_ai_summary.place(x=10, y=100, width=120, height=25)
+lbl_ai_summary.place(x=10, y=70, width=120, height=25)  # was y=100
 
 # AI Summary generate button
 style.configure("btnaisummary.TButton", background="#E4E2E2", foreground="#000", font=("", 10))
@@ -824,21 +890,21 @@ style.map("btnaisummary.TButton", background=[("active", "#E4E2E2")],
 
 btnaisummary = ttk.Button(framedetails, text="✨ Generálás", style="btnaisummary.TButton",
                           command=generate_summary_for_selected_single)
-btnaisummary.place(x=590, y=98, width=100, height=28)
+btnaisummary.place(x=590, y=68, width=100, height=28)  # was y=98
 
 # AI Summary text box (read-only)
 txt_ai_summary = tk.Text(framedetails, wrap="word", bg="#FFFACD", fg="#000",
                          font=("", 10), relief="solid", borderwidth=1, state='disabled')
-txt_ai_summary.place(x=10, y=130, width=680, height=80)
+txt_ai_summary.place(x=10, y=100, width=680, height=80)  # was y=130
 
 # Message body section
-lbl_body = tk.Label(framedetails, text="Üzenet:", bg="#F9F9F9", fg="#333",
+lbl_body = tk.Label(framedetails, text="Üzenet:", bg="#F5F5F5", fg="#333",
                     font=("", 10, "bold"), anchor="w")
-lbl_body.place(x=10, y=220, width=80, height=25)
+lbl_body.place(x=10, y=190, width=80, height=25)
 
 # HTML body viewer
 html_body = HTMLScrolledText(framedetails, html="<p>Válasszon ki egy emailt.</p>")
-html_body.place(x=10, y=250, width=680, height=320)
+html_body.place(x=10, y=220, width=680, height=350)
 
 # Attachment buttons (3 buttons for first 3 attachments)
 style.configure("btnattachment.TButton", background="#E4E2E2", foreground="#000", font=("", 9))
@@ -863,7 +929,8 @@ detail_widgets = {
     'sender_value': lbl_sender_value,
     'subject_value': lbl_subject_value,
     'date_value': lbl_date_value,
-    'tag_value': lbl_tag_value,
+    'tag_dropdown': tag_dropdown,
+    'tag_var': tag_var,
     'ai_summary': txt_ai_summary,
     'body': html_body,
     'attachment_buttons': [btnattachment1, btnattachment2, btnattachment3],
