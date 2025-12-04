@@ -25,17 +25,15 @@ class EmailController:
         """
         self.storage = storage_service
         self.gmail = gmail_service
-    
+
     def load_offline_emails(self) -> List[Dict]:
-        """Load emails from local storage
-        
-        Returns:
-            List of email dictionaries
-        """
         try:
             emails = self.storage.load_emails()
             if emails:
-                apply_rules(emails)
+                # csak azokra futtatunk szabályt, ahol még nincs címke
+                uncategorized = [e for e in emails if e.get("tag", "----") == "----"]
+                if uncategorized:
+                    apply_rules(uncategorized)
                 app_state.all_emails = emails
                 app_state.update_categorized_counts()
             return emails
@@ -43,7 +41,7 @@ class EmailController:
             print(f"[ERROR] Failed to load offline emails: {e}")
             messagebox.showerror("Hiba", f"Email betöltési hiba:\n{e}")
             return []
-    
+
     def fetch_new_emails(self, max_results: int = 100, progress_callback=None) -> List[Dict]:
         """Fetch new emails from Gmail
         
@@ -296,3 +294,29 @@ class EmailController:
             items.sort(key=lambda x: x[1].get("datetime", ""), reverse=reverse)
         
         return items
+
+    def update_tag_for_email(self, updated_email: Dict, new_tag: str) -> None:
+        """Egy email címkéjének frissítése és mentése CSV-be (message_id alapján)."""
+        try:
+            all_emails = self.storage.load_emails()
+        except Exception as e:
+            print(f"[ERROR] Cannot load emails for tag update: {e}")
+            return
+
+        email_id_map = {e.get("message_id"): e for e in all_emails}
+        msg_id = updated_email.get("message_id")
+
+        if not msg_id or msg_id not in email_id_map:
+            print(f"[WARN] Email with message_id={msg_id} not found in storage; tag not saved.")
+            return
+
+        email_in_storage = email_id_map[msg_id]
+        email_in_storage["tag"] = new_tag
+
+        try:
+            self.storage.save_emails(all_emails)
+            app_state.all_emails = all_emails
+            app_state.update_categorized_counts()
+            print(f"[INFO] Tag saved for message_id={msg_id}: {new_tag}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save tag change: {e}")
