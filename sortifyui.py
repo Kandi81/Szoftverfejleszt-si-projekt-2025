@@ -15,6 +15,9 @@ from tkhtmlview import HTMLScrolledText
 # NEW: Import from modular architecture
 from models import app_state
 from utils import resource_path, format_date_hungarian, clean_html_for_display
+from utils.config_helper import get_ai_consent, set_ai_consent  # <-- ÚJ!
+from services.attachment_cache_service import AttachmentCacheService
+from ui.ai_consent_dialog import show_ai_consent_dialog  # <-- ÚJ!
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -28,6 +31,9 @@ auth_controller = None
 # UI-specific state (not in app_state)
 detail_widgets = {}
 select_all_var = None
+
+# Attachment verification cache
+attachment_cache = AttachmentCacheService()
 
 # AI icon (for treeview)
 AI_ICON = "✨"
@@ -134,6 +140,75 @@ def load_offline_emails():
         messagebox.showerror("Hiba", f"Email betöltési hiba:\n{e}")
 
 
+def truncate_filename(filename: str, max_length: int = 20) -> str:
+    """Truncate filename preserving extension
+
+    Example: 'Very_Long_Document_Name.pdf' -> 'Very_Long_Do....pdf'
+    """
+    if len(filename) <= max_length:
+        return filename
+
+    if '.' in filename:
+        name_part, ext_part = filename.rsplit('.', 1)
+        ext_with_dot = '.' + ext_part
+        available = max_length - len(ext_with_dot) - 3  # -3 for '...'
+        if available < 1:
+            return filename[:max_length]
+        return f"{name_part[:available]}...{ext_with_dot}"
+    else:
+        return filename[:max_length - 3] + "..."
+
+
+def verify_attachment_safety(email_id: str, filename: str) -> tuple:
+    """Verify attachment safety with caching
+
+    Args:
+        email_id: Email identifier
+        filename: Attachment filename
+
+    Returns:
+        tuple: (is_safe: bool, reason: str or None)
+    """
+    # Check cache first
+    cached = attachment_cache.get_verification(email_id, filename)
+    if cached:
+        return (cached['is_safe'], cached.get('reason'))
+
+    # Perform verification
+    is_safe = True
+    reason = None
+
+    if not filename:
+        return (True, None)
+
+    # Suspicious extensions
+    dangerous_extensions = ['.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.js', '.jar', '.app', '.msi', '.dll']
+
+    filename_lower = filename.lower()
+
+    # Check for double extension (e.g., 'document.pdf.exe')
+    parts = filename_lower.split('.')
+    if len(parts) > 2:
+        # Check if second-to-last part is a document extension
+        doc_extensions = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'png', 'jpg', 'jpeg']
+        if len(parts) >= 3 and parts[-2] in doc_extensions:
+            is_safe = False
+            reason = f"Dupla kiterjesztés: .{parts[-2]}.{parts[-1]} (gyanús átnevezés)"
+
+    # Check for dangerous extension
+    if is_safe:
+        for ext in dangerous_extensions:
+            if filename_lower.endswith(ext):
+                is_safe = False
+                reason = f"Veszélyes fájltípus: {ext}"
+                break
+
+    # Store in cache
+    attachment_cache.store_verification(email_id, filename, is_safe, reason)
+
+    return (is_safe, reason)
+
+
 def update_details_panel(email_data):
     """Update the details panel with selected email data"""
     if not email_data:
@@ -141,17 +216,22 @@ def update_details_panel(email_data):
         detail_widgets['sender_value'].config(text="")
         detail_widgets['subject_value'].config(text="")
         detail_widgets['date_value'].config(text="")
-        detail_widgets['tag_var'].set("")  # Clear dropdown
+        detail_widgets['tag_var'].set("")
         detail_widgets['ai_summary'].config(state='normal')
         detail_widgets['ai_summary'].delete('1.0', tk.END)
         detail_widgets['ai_summary'].config(state='disabled')
-        detail_widgets['body'].set_html(
+
+        # Clear notebook tabs
+        notebook = detail_widgets['notebook']
+        for tab in notebook.tabs():
+            notebook.forget(tab)
+
+        # Add default "Üzenet" tab
+        msg_tab = detail_widgets['message_tab']
+        notebook.add(msg_tab, text="Üzenet")
+        detail_widgets['message_display'].set_html(
             '<p style="color: #999;">Válasszon ki egy emailt a részletek megtekintéséhez.</p>')
 
-        # Hide all attachment buttons
-        for btn in detail_widgets['attachment_buttons']:
-            btn.place_forget()
-        detail_widgets['btnattachcheck'].place_forget()
         return
 
     # Update fields
@@ -162,10 +242,6 @@ def update_details_panel(email_data):
     # Tag dropdown - set current value
     tag = email_data.get('tag', '----')
     if tag and tag != '----':
-        # Capitalize first letter to match dropdown values
-        tag_display = tag.capitalize()
-
-        # Map storage values to display values
         tag_map = {
             'vezetoseg': 'Vezetőség',
             'tanszek': 'Tanszék',
@@ -174,7 +250,7 @@ def update_details_panel(email_data):
             'milt-on': 'Milt-On',
             'hianyos': 'Hiányos'
         }
-        tag_display = tag_map.get(tag.lower(), tag_display)
+        tag_display = tag_map.get(tag.lower(), tag.capitalize())
         detail_widgets['tag_var'].set(tag_display)
     else:
         detail_widgets['tag_var'].set("")
@@ -189,35 +265,44 @@ def update_details_panel(email_data):
         detail_widgets['ai_summary'].insert('1.0', '[Még nincs AI összefoglaló - kattints a ✨ gombra a generáláshoz]')
     detail_widgets['ai_summary'].config(state='disabled')
 
+    # ==================== NOTEBOOK TABS ====================
+    notebook = detail_widgets['notebook']
+
+    # Clear all tabs
+    for tab in notebook.tabs():
+        notebook.forget(tab)
+
+    # Add "Üzenet" tab (always present)
+    msg_tab = detail_widgets['message_tab']
+    notebook.add(msg_tab, text="Üzenet")
+
     # Message body (HTML rendered with cleanup)
     body_html = email_data.get('body_html', '')
     body_plain = email_data.get('body_plain', '')
 
     try:
         if body_html:
-            # Clean HTML before rendering
             cleaned_html = clean_html_for_display(body_html)
-            detail_widgets['body'].set_html(cleaned_html)
+            detail_widgets['message_display'].set_html(cleaned_html)
         elif body_plain:
-            # Fallback to plain text wrapped in <pre> tag
             escaped_plain = body_plain.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            detail_widgets['body'].set_html(
+            detail_widgets['message_display'].set_html(
                 f'<pre style="font-family: Arial; font-size: 12px; white-space: pre-wrap;">{escaped_plain}</pre>')
         else:
-            detail_widgets['body'].set_html('<p style="color: #999;">Nincs üzenet törzs.</p>')
+            detail_widgets['message_display'].set_html('<p style="color: #999;">Nincs üzenet törzs.</p>')
     except Exception as e:
         print(f"[ERROR] Failed to render HTML body: {e}")
-        # Fallback to plain text if HTML rendering fails
         if body_plain:
             escaped_plain = body_plain.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            detail_widgets['body'].set_html(
+            detail_widgets['message_display'].set_html(
                 f'<pre style="font-family: Arial; font-size: 12px;">{escaped_plain[:1000]}</pre>')
         else:
-            detail_widgets['body'].set_html('<p style="color: red;">Hiba az email megjelenítése során.</p>')
+            detail_widgets['message_display'].set_html('<p style="color: red;">Hiba az email megjelenítése során.</p>')
 
-    # Attachments
+    # ==================== ATTACHMENT TABS (AUTO-VERIFIED) ====================
     attachment_count = int(email_data.get('attachment_count', 0))
     attachment_names = email_data.get('attachment_names', '')
+    email_id = email_data.get('id', 'unknown')
 
     # Parse attachment names
     attachments = []
@@ -227,32 +312,62 @@ def update_details_panel(email_data):
     elif isinstance(attachment_names, list):
         attachments = [str(a).strip() for a in attachment_names if str(a).strip()]
 
-    # Hide all buttons first
-    for btn in detail_widgets['attachment_buttons']:
-        btn.place_forget()
-    detail_widgets['btnattachcheck'].place_forget()
-
-    # Show up to 3 attachment buttons
-    max_chars = 30
+    # Create tabs for attachments (max 3)
     for idx, filename in enumerate(attachments[:3]):
         # Truncate filename if too long
-        if len(filename) > max_chars:
-            if '.' in filename:
-                name_part = filename.rsplit('.', 1)[0]
-                ext_part = '.' + filename.rsplit('.', 1)[1]
-                available = max_chars - len(ext_part) - 3
-                display_name = name_part[:available] + "..." + ext_part
-            else:
-                display_name = filename[:max_chars - 3] + "..."
+        display_name = truncate_filename(filename, max_length=20)
+
+        # AUTO-VERIFY attachment safety (with caching)
+        is_safe, reason = verify_attachment_safety(email_id, filename)
+
+        # Create tab frame with WHITE background
+        att_tab = tk.Frame(notebook, bg="#FFFFFF")
+
+        # Add tab with emoji and color indication
+        if is_safe:
+            tab_text = f"✅ {display_name}"
         else:
-            display_name = filename
+            tab_text = f"⚠️ {display_name}"
 
-        detail_widgets['attachment_buttons'][idx].config(text=f"📎 {display_name}")
-        detail_widgets['attachment_buttons'][idx].place(x=10, y=580 + (idx * 35), width=450, height=30)
+        notebook.add(att_tab, text=tab_text)
 
-    # Show "Csatolmányok ellenőrzése" button if attachments exist
-    if attachment_count > 0:
-        detail_widgets['btnattachcheck'].place(x=470, y=580, width=210, height=30)
+        # Create text widget for content (readonly) - WHITE background
+        att_text = tk.Text(
+            att_tab,
+            wrap=tk.WORD,
+            state='disabled',
+            bg="#FFFFFF",
+            font=("Segoe UI", 10),
+            relief="flat"
+        )
+        att_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Insert content with colored header
+        att_text.config(state='normal')
+        if not is_safe:
+            # Red warning header
+            att_text.tag_configure("warning_header", background="#F8D7DA", foreground="#721C24",
+                                   font=("Segoe UI", 11, "bold"))
+            att_text.insert('1.0', "⚠️ FIGYELEM: Gyanús csatolmány!\n\n", "warning_header")
+            att_text.insert('end',
+                            f"📎 Fájl: {filename}\n\n"
+                            f"🔍 Probléma: {reason}\n\n"
+                            f"⚠️ JAVASOLT TEENDŐ:\n"
+                            f"• Ne nyissa meg ezt a fájlt!\n"
+                            f"• Ellenőrizze a feladóval telefonon/személyesen\n"
+                            f"• Jelentse a biztonsági csapatnak\n"
+                            f"• Törölje az emailt ha nem várt\n")
+        else:
+            # Green safe header
+            att_text.tag_configure("safe_header", background="#D4EDDA", foreground="#155724",
+                                   font=("Segoe UI", 11, "bold"))
+            att_text.insert('1.0', f"✅ Biztonságos csatolmány\n\n", "safe_header")
+            att_text.insert('end',
+                            f"📎 Fájl: {filename}\n\n"
+                            f"✓ A fájl automatikus ellenőrzésen átment\n"
+                            f"✓ Nem tartalmaz gyanús kiterjesztést\n\n"
+                            f"[AI összefoglaló a csatolmány tartalmáról - funkció fejlesztés alatt]")
+        att_text.config(state='disabled')
 
 
 def on_tree_select(_event=None):
@@ -286,6 +401,14 @@ def generate_summary_for_selected_single():
     if len(selected_items) != 1:
         messagebox.showinfo("Info", "Válasszon ki pontosan egy emailt az AI összefoglaló generálásához.")
         return
+
+    # CHECK AI CONSENT FIRST
+    if not get_ai_consent():
+        result = show_ai_consent_dialog(windowsortify)
+        if not result:
+            # User declined - do nothing, just return
+            return
+        # If accepted, consent is now saved, continue...
 
     # Get selected email
     item_id = selected_items[0]
@@ -423,49 +546,6 @@ def clear_filters():
     filter_status_label.config(text="")
     btncategorize.config(state="disabled")
     btnclearfilters.place_forget()
-
-
-def verify_attachments():
-    """Verify attachments for the currently selected email"""
-    selected_items = treeemails.selection()
-
-    if len(selected_items) != 1:
-        messagebox.showinfo("Info", "Válasszon ki pontosan egy emailt a csatolmányok ellenőrzéséhez.")
-        return
-
-    item_id = selected_items[0]
-    email_data = app_state.email_data_map.get(item_id, {})
-
-    if int(email_data.get('attachment_count', 0)) == 0:
-        messagebox.showinfo("Info", "Ennek az emailnek nincs csatolmánya.")
-        return
-
-    # Import verification service
-    from services import verify_attachments as verify_service
-
-    # Run verification on single email
-    results = verify_service([email_data])
-
-    # Display results
-    total = results['total_attachments']
-    suspicious = results['suspicious_count']
-
-    if suspicious == 0:
-        messagebox.showinfo("Ellenőrzés kész",
-                            f"Ellenőrzött csatolmányok: {total}\n"
-                            f"Gyanús fájlok: 0\n\n"
-                            f"Minden csatolmány rendben van! ✓")
-    else:
-        # Build detailed message
-        email_info = results['suspicious_emails'][0]
-        msg = f"Ellenőrzött csatolmányok: {total}\nGyanús fájlok: {suspicious}\n\n"
-        msg += "GYANÚS CSATOLMÁNYOK:\n" + "=" * 50 + "\n\n"
-
-        for att in email_info['suspicious_attachments']:
-            msg += f"⚠️  {att['filename']}\n"
-            msg += f"   {att['reason']}\n\n"
-
-        messagebox.showwarning("FIGYELEM - Gyanús csatolmányok", msg)
 
 
 def categorize_emails():
@@ -623,7 +703,7 @@ def on_key_press(event):
 
 # Window and styles
 windowsortify = tk.Tk()
-windowsortify.title("Sortify v0.4.1")
+windowsortify.title("Sortify v0.5.0")
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1724x743")
 
@@ -812,7 +892,7 @@ lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F5F5F5", fg="#333", fo
 lbl_subject.place(x=10, y=40, width=50, height=25)
 
 lbl_subject_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#000", font=("", 10), anchor="w",
-                              wraplength=620, justify="left")
+                             wraplength=620, justify="left")
 lbl_subject_value.place(x=65, y=40, width=620, height=25)
 
 # Tag dropdown (moved under date, right side) - NO "Címke:" label
@@ -881,7 +961,7 @@ tag_dropdown.bind("<<ComboboxSelected>>", on_tag_dropdown_change)
 # AI Summary section (moved up by 30px)
 lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F5F5F5", fg="#333",
                           font=("", 10, "bold"), anchor="w")
-lbl_ai_summary.place(x=10, y=70, width=120, height=25)  # was y=100
+lbl_ai_summary.place(x=10, y=70, width=120, height=25)
 
 # AI Summary generate button
 style.configure("btnaisummary.TButton", background="#E4E2E2", foreground="#000", font=("", 10))
@@ -890,39 +970,29 @@ style.map("btnaisummary.TButton", background=[("active", "#E4E2E2")],
 
 btnaisummary = ttk.Button(framedetails, text="✨ Generálás", style="btnaisummary.TButton",
                           command=generate_summary_for_selected_single)
-btnaisummary.place(x=590, y=68, width=100, height=28)  # was y=98
+btnaisummary.place(x=590, y=68, width=100, height=28)
 
 # AI Summary text box (read-only)
 txt_ai_summary = tk.Text(framedetails, wrap="word", bg="#FFFACD", fg="#000",
                          font=("", 10), relief="solid", borderwidth=1, state='disabled')
-txt_ai_summary.place(x=10, y=100, width=680, height=80)  # was y=130
+txt_ai_summary.place(x=10, y=100, width=680, height=80)
 
-# Message body section
-lbl_body = tk.Label(framedetails, text="Üzenet:", bg="#F5F5F5", fg="#333",
-                    font=("", 10, "bold"), anchor="w")
-lbl_body.place(x=10, y=190, width=80, height=25)
+# ==================== TABBED NOTEBOOK (Message + Attachments) ====================
 
-# HTML body viewer
-html_body = HTMLScrolledText(framedetails, html="<p>Válasszon ki egy emailt.</p>")
-html_body.place(x=10, y=220, width=680, height=350)
+# Create notebook for tabbed interface
+notebook = ttk.Notebook(framedetails)
+notebook.place(x=10, y=190, width=680, height=480)
 
-# Attachment buttons (3 buttons for first 3 attachments)
-style.configure("btnattachment.TButton", background="#E4E2E2", foreground="#000", font=("", 9))
-style.map("btnattachment.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000")])
+# Create "Üzenet" tab (always present)
+message_tab = tk.Frame(notebook, bg="#FFFFFF")
+notebook.add(message_tab, text="Üzenet")
 
-btnattachment1 = ttk.Button(framedetails, text="📎 attachment1.pdf", style="btnattachment.TButton")
-btnattachment2 = ttk.Button(framedetails, text="📎 attachment2.docx", style="btnattachment.TButton")
-btnattachment3 = ttk.Button(framedetails, text="📎 attachment3.xlsx", style="btnattachment.TButton")
-
-# Verify attachments button
-style.configure("btnattachcheck.TButton", background="#FFD700", foreground="#000", font=("", 9, "bold"))
-style.map("btnattachcheck.TButton", background=[("active", "#FFC700")],
-          foreground=[("active", "#000")])
-
-btnattachcheck = ttk.Button(framedetails, text="🔍 Csatolmányok ellenőrzése",
-                            style="btnattachcheck.TButton",
-                            command=verify_attachments)
+# HTML message display in tab
+message_display = HTMLScrolledText(
+    message_tab,
+    html="<p style='color: #999;'>Válasszon ki egy emailt.</p>"
+)
+message_display.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
 # Store detail widgets in dictionary for easy access
 detail_widgets = {
@@ -932,9 +1002,9 @@ detail_widgets = {
     'tag_dropdown': tag_dropdown,
     'tag_var': tag_var,
     'ai_summary': txt_ai_summary,
-    'body': html_body,
-    'attachment_buttons': [btnattachment1, btnattachment2, btnattachment3],
-    'btnattachcheck': btnattachcheck
+    'notebook': notebook,
+    'message_tab': message_tab,
+    'message_display': message_display
 }
 
 # ==================== INITIALIZATION ====================
@@ -979,3 +1049,8 @@ def initialize_ui():
 
     # Load offline emails
     load_offline_emails()
+
+    # CHECK AI CONSENT ON STARTUP (show dialog if not given)
+    if not get_ai_consent():
+        # Schedule consent dialog after window is fully loaded
+        windowsortify.after(500, lambda: show_ai_consent_dialog(windowsortify))
