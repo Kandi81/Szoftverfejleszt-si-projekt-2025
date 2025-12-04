@@ -197,29 +197,37 @@ def apply_rules(emails: List[Dict]) -> List[Dict]:
     """
     Apply categorization rules to a list of emails.
     Updates 'tag' and 'rule_applied' fields in place.
-    Returns the updated list.
 
-    Rules are applied in priority order:
-    1. tanszek (department) - YOUR department takes precedence
-    2. vezetoseg (leadership) - other department heads and top management
-    3. neptun
-    4. moodle
-    5. milt-on
-    6. Student emails (non-university domain) - LAST priority before default
-    7. Default (uncategorized - stays as ----)
+    **NEW: If email already has a valid Gmail label (not '----'), skip rule application.**
+
+    Returns the updated list.
     """
+    # Sortify kategóriák (amiket a Gmail címkézés is használ)
+    sortify_categories = {
+        "vezetoseg", "tanszek", "neptun", "moodle", "milt-on",
+        "hianyos", "Vezetőség", "Tanszék", "Neptun", "Moodle",
+        "Milton", "Hiányos", "Hibás csatolmány", "Hírlevél",
+        "Tanulói", "Egyéb"
+    }
+
     for email_item in emails:
+        # ÚJ: Ha már van érvényes Gmail címke, ne írjuk felül
+        existing_tag = email_item.get("tag", "----")
+        if existing_tag and existing_tag != "----" and existing_tag in sortify_categories:
+            # Gmail címke prioritása: megtartjuk
+            continue
+
         sender_raw = email_item.get("sender", "")
         sender_email = extract_email_from_sender(sender_raw)
         sender_domain = email_item.get("sender_domain", "").lower()
 
-        # Priority 1: Department (YOUR department first!)
+        # Priority 1: Department
         if sender_email in DEPARTMENT_EMAILS:
             email_item["tag"] = "tanszek"
             email_item["rule_applied"] = "tanszek"
             continue
 
-        # Priority 2: Leadership (other department heads)
+        # Priority 2: Leadership
         if sender_email in LEADERSHIP_EMAILS:
             email_item["tag"] = "vezetoseg"
             email_item["rule_applied"] = "vezetoseg"
@@ -243,14 +251,13 @@ def apply_rules(emails: List[Dict]) -> List[Dict]:
             email_item["rule_applied"] = "milt-on"
             continue
 
-        # Priority 6: Student emails (non-university domain) - MOVED TO END
+        # Priority 6: Student emails
         if sender_domain and UNI_DOMAIN not in sender_domain:
             email_item["tag"] = "hianyos"
             email_item["rule_applied"] = "student_mail"
             continue
 
-        # Default: Uncategorized/incomplete (keep as ----)
-        # This catches uni-milton.hu emails that didn't match any specific rule
+        # Default: Uncategorized
         email_item["tag"] = "----"
         email_item["rule_applied"] = ""
 

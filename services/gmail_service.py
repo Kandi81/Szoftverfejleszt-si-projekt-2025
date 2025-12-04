@@ -23,6 +23,7 @@ class GmailService:
         self.token_path = token_path
         self.creds = None
         self.service = None
+        self._label_cache = None
 
     def authenticate(self):
         """Authenticate with Gmail API"""
@@ -197,6 +198,22 @@ class GmailService:
 
             # Get body (both plain and HTML)
             body_data = self.get_email_body(message_id)
+            label_ids = message.get('labelIds', [])
+            gmail_tag = '----'
+
+            if label_ids:
+                sortify_categories = [
+                    "Vezetőség", "Hiányos", "Hibás csatolmány", "Hírlevél",
+                    "Neptun", "Tanulói", "Milton", "Moodle", "Egyéb"
+                ]
+
+                label_map = self.get_label_map()  # cache-elt címkék
+
+                for label_id in label_ids:
+                    label_name = label_map.get(label_id, '')
+                    if label_name in sortify_categories:
+                        gmail_tag = label_name
+                        break
 
             return {
                 'message_id': message_id,
@@ -208,7 +225,8 @@ class GmailService:
                 'mime_types': '|'.join(mime_types) if mime_types else '',
                 'body_plain': body_data.get('plain', ''),
                 'body_html': body_data.get('html', ''),
-                'is_last_downloaded': 1  # Mark as newly downloaded
+                'tag': gmail_tag,  # ← ÚJ SOR IDE
+                'is_last_downloaded': 1
             }
 
         except HttpError as error:
@@ -234,3 +252,14 @@ class GmailService:
         except HttpError as error:
             print(f'An error occurred: {error}')
             return None
+
+    def get_label_map(self):
+        """Get all Gmail labels (cached)"""
+        if self._label_cache is None:
+            try:
+                labels_response = self.service.users().labels().list(userId='me').execute()
+                self._label_cache = {lbl['id']: lbl['name'] for lbl in labels_response.get('labels', [])}
+            except Exception as e:
+                print(f"[GMAIL] Label cache error: {e}")
+                self._label_cache = {}
+        return self._label_cache
