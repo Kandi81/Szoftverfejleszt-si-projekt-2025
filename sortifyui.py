@@ -454,34 +454,50 @@ def verify_attachments():
 
         messagebox.showwarning("FIGYELEM - Gyanús csatolmányok", msg)
 
+def get_selected_single_email():
+    """Visszaadja a kijelölt egyetlen email adatát (dict), vagy None-t."""
+    selected_items = treeemails.selection()
+    if len(selected_items) != 1:
+        return None
+    item_id = selected_items[0]
+    return app_state.email_data_map.get(item_id)
 
 def categorize_emails():
-    """Re-apply categorization rules to selected uncategorized emails"""
-    if email_controller is None:
-        messagebox.showerror("Hiba", "Email controller not initialized")
+    """Kiválasztott email AI-alapú újracímkézése + Gmail címke."""
+    if ai_controller is None:
+        messagebox.showerror("Hiba", "AI controller not initialized")
         return
 
-    # Get selected items
-    selected_items = treeemails.selection()
-
-    if not selected_items:
+    email_data = get_selected_single_email()
+    if not email_data:
         messagebox.showinfo("Info",
-                            "Nincs kiválasztott email.\n\nVálasszon ki egy vagy több emailt a kategorizáláshoz.")
+                            "Válasszon ki pontosan egy emailt a kategorizáláshoz.")
         return
 
-    # Get selected email data
-    selected_emails = [app_state.email_data_map[item] for item in selected_items if item in app_state.email_data_map]
+    windowsortify.config(cursor="watch")
+    windowsortify.update_idletasks()
+    try:
+        # AI controllerrel kategóriát választunk és Gmail címkét írunk
+        ai_controller.auto_label_email(email_data)
 
-    # Categorize using controller
-    count = email_controller.categorize_selected_emails(selected_emails)
+        # Frissítjük a részletek panelt és a fa adott sorát
+        update_details_panel(email_data)
 
-    # Refresh UI if any were categorized
-    if count > 0:
-        populate_tree_from_emails(app_state.all_emails)
+        # Keresd meg az adott item_id-t a map alapján és frissítsd a Tag oszlopot
+        for item_id, data in app_state.email_data_map.items():
+            if data is email_data:
+                values = list(treeemails.item(item_id, 'values'))
+                # Tag oszlop indexe: 2 (Sender, Subject, Tag, Attach, AI, Date)
+                values[2] = email_data.get("tag", email_data.get("category", ""))
+                treeemails.item(item_id, values=values)
+                break
+
+        # Számlálók frissítése
         update_tag_counts_from_storage(app_state.all_emails)
 
-    # Clear selection after categorization
-    treeemails.selection_remove(treeemails.get_children())
+    finally:
+        windowsortify.config(cursor="")
+        windowsortify.update_idletasks()
 
 
 def sort_tree_by_column(col_name):

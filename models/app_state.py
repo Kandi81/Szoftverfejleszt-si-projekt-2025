@@ -40,6 +40,7 @@ class AppState:
     
     # Services
     email_storage: Optional[object] = None
+    gmail_service: Optional[object] = None
     
     def reset_filters(self):
         """Reset all filter states"""

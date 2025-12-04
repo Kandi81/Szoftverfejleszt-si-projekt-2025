@@ -5,9 +5,9 @@ Handles AI summary generation
 from typing import Optional, Dict
 from tkinter import messagebox
 
-from models.app_state import app_state
 from services import StorageService, AIServiceFactory
 from utils import strip_html_tags
+from services.gmailcimke import apply_label_to_message
 
 
 class AIController:
@@ -118,3 +118,75 @@ class AIController:
         messagebox.showinfo("Siker", f"AI összefoglaló generálva {len(summaries)} emailhez!")
         
         return summaries
+
+    def _call_ai_for_label(self, prompt: str) -> str:
+        """Promptot küld az AI kliensnek és visszaadja a szöveges választ."""
+        if not self.ai_client:
+            return ""
+
+        try:
+            # A summarize_email subject paraméterét használjuk "műcímnek",
+            # a tényleges promptot pedig body_textként adjuk át.
+            return self.ai_client.summarize_email(
+                subject="Email kategorizálás",
+                body_text=prompt,
+                sender=""
+            ) or ""
+        except Exception as e:
+            print(f"[AI] Error during label call: {e}")
+            return ""
+
+    def auto_label_email(self, email_data: dict) -> None:
+        """Kiválasztott email AI-alapú újracímkézése (dict alapú)."""
+        if not email_data:
+            return
+
+        allowed_categories = [
+            "Vezetőség",
+            "Hiányos",
+            "Hibás csatolmány",
+            "Hírlevél",
+            "Neptun",
+            "Tanulói",
+            "Milton",
+            "Moodle",
+            "Egyéb",
+        ]
+
+        subject = email_data.get("subject", "")
+        body_preview = email_data.get("body_plain", "") or email_data.get("preview_text", "")
+
+        # Szigorúbb prompt: CSAK a kategórianév
+        prompt = (
+                f"Válassz PONTOSAN EGY kategóriát az alábbi listából az email alapján.\n\n"
+                f"KATEGÓRIÁK:\n"
+                + "\n".join([f"- {cat}" for cat in allowed_categories])
+                + f"\n\n"
+                  f"EMAIL TÁRGYA: {subject}\n\n"
+                  f"EMAIL SZÖVEGE: {body_preview[:1500]}\n\n"
+                  f"VÁLASZ: Írd le CSAK a kiválasztott kategória pontos nevét, semmi mást!\n"
+                 # f"Példa helyes válasz: Neptun\n"
+                  f"NE adj magyarázatot, NE írj mondatot!"
+        )
+
+        raw_category = (self._call_ai_for_label(prompt) or "").strip()
+
+        print(f"[AI-LABEL] Nyers válasz: '{raw_category}'")
+
+        # Keresés: ha bármelyik engedélyezett kategória szerepel a válaszban
+        category = "Egyéb"
+        for allowed in allowed_categories:
+            if allowed.lower() in raw_category.lower():
+                category = allowed
+                print(f"[AI-LABEL] Találat: '{allowed}' a válaszban")
+                break
+
+        print(f"[AI-LABEL] Végső kategória: '{category}'")
+
+        # Lokális adat frissítése
+        email_data["tag"] = category
+
+        # Gmail címke ráírása
+        message_id = email_data.get("message_id")
+        if message_id:
+            apply_label_to_message(message_id, category)
