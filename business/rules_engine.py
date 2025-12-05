@@ -8,7 +8,6 @@ from typing import List, Dict, Set
 import configparser
 import os
 
-
 # -------- Hardcoded fallback configuration --------
 # Used if INI file is missing or corrupt
 
@@ -61,7 +60,6 @@ FALLBACK_MILTON_ADDRESSES = {
 }
 
 FALLBACK_UNI_DOMAIN = "uni-milton.hu"
-
 
 # -------- Runtime configuration (loaded from INI or fallback) --------
 
@@ -207,8 +205,24 @@ def apply_rules(emails: List[Dict]) -> List[Dict]:
     5. milt-on
     6. Student emails (non-university domain) - LAST priority before default
     7. Default (uncategorized - stays as ----)
+
+    MERGED LOGIC:
+    - Skips emails that already have valid tags (manual or Gmail-based)
+    - Only applies rules to emails with tag == '----'
     """
+    # Define valid Sortify categories (merged from both branches)
+    sortify_categories = {
+        "vezetoseg", "tanszek", "neptun", "moodle", "milt-on", "hianyos"
+    }
+
     for email_item in emails:
+        current_tag = (email_item.get("tag") or "----").lower()
+
+        # MERGED SKIP LOGIC: Don't overwrite existing valid tags
+        # (from main: skip if not '----', from branch1: skip if valid Gmail tag)
+        if current_tag != "----" and current_tag in sortify_categories:
+            continue
+
         sender_raw = email_item.get("sender", "")
         sender_email = extract_email_from_sender(sender_raw)
         sender_domain = email_item.get("sender_domain", "").lower()
@@ -250,7 +264,6 @@ def apply_rules(emails: List[Dict]) -> List[Dict]:
             continue
 
         # Default: Uncategorized/incomplete (keep as ----)
-        # This catches uni-milton.hu emails that didn't match any specific rule
         email_item["tag"] = "----"
         email_item["rule_applied"] = ""
 
@@ -272,7 +285,6 @@ def get_rule_summary() -> Dict:
 
 # Load rules on module import
 load_rules_from_ini()
-
 
 # Example for testing
 if __name__ == "__main__":
