@@ -8,10 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Student email pre-triage with heuristics
-- Gemini LLM integration for intelligent email analysis
-- Gmail label auto-application based on categories
-- Export/report generation features
+- None
+
+---
+
+## [1.0.0] - 2025-12-05
+
+### Added
+- **Gmail label sync**: kézi és AI címkeváltoztatás automatikusan módosítja a megfelelő Gmail címkéket a leveleken.
+- **„Egyéb” címke**: dedikált kategória a nem szakmai / hírlevél jellegű üzenetekhez.
+- **AI címkézés Gmail integrációval**: az AI által beállított Sortify-tag azonnal visszaíródik Gmail labelként.
+- **Label debugger**: Gmail label ID → név mapping debug log a fejlesztői hibaelhárításhoz.
+
+### Changed
+- **Címke pipeline**: a Gmailből érkező címke a golden source, a rules engine nem írhatja felül az érvényes (vezetoseg, tanszek, neptun, moodle, milt-on, hianyos, egyeb) tageket.
+- **Fallback logika**: megszűnt az automatikus „Egyéb/Hiányos” ráragasztás, ahol nincs címke; címke nélküli levelek `----` státuszban maradnak.
+- **Rules engine**: a „student_mail” szabály már nem kényszerít minden nem egyetemi domainre `hianyos` címkét, csak a tényleg szabály alapján illeszkedőkre.
+- **GmailService**: közvetlen label-név → belső tag mappingre állt át (Vezetőség, Tanszék, Neptun, Moodle, Milton, Hiányos, Egyéb).
+
+### Fixed
+- **Gmail API 400**: javítva a „Cannot both add and remove the same label” hiba a `users.messages.modify` hívásban (add/remove label ID-k metszete megszüntetve).
+- **AI címkézés**: `name 'new_tag' is not defined` kivétel megszüntetve, az AI által beállított `email_data["tag"]` kerül mentésre.
+- **Gmail/CSV inkonzisztenciák**: a storage réteg a Gmailből érkező tag-et tekinti elsődlegesnek szinkronizáláskor.
+
+---
+
+## [0.5.1] - 2025-11-27
+
+### Added
+- Manuális címkementés CSV-be a részletező panel dropdownjából.
+- Kezdőképernyőn helyes kategória-számlálók a már meglévő CSV alapján.
+
+### Fixed
+- Címkeszámlálók nem nullázták magukat újraindításkor.
+- Szabálymotor nem írta felül többé a kézzel beállított tageket.
+
+---
+
+## [0.4.1] - 2025-11-22
+
+### Added
+- AI hozzájárulási (consent) dialógus és beállítás mentése.
+- Alap AI összefoglaló mező az emailekhez.
+
+### Changed
+- Folyamatjelzők és státuszszövegek finomhangolása a jobb felhasználói visszajelzés érdekében.
 
 ---
 
@@ -100,8 +141,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
-- **v0.3.0** (2025-11-17) - Settings UI & Configuration Management - 80% complete
-- **v0.2.0** (2025-11-16) - Attachment Verification & UI Polish - 70% complete
-- **v0.1.0** (2025-11-15) - Initial MVP Release - 50% complete
+- **v1.0.0** (2025-12-05) - Gmail label sync & AI integration
+- **v0.5.1** (2025-11-27) - Manual tag persistence & startup counters
+- **v0.4.1** (2025-11-22) - AI consent & minor improvements
+- **v0.3.0** (2025-11-17) - Settings UI & configuration
+- **v0.2.0** (2025-11-16) - Attachment verification & UI polish
+- **v0.1.0** (2025-11-15) - Initial MVP release
+
 
 ---
