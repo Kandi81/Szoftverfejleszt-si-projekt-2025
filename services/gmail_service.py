@@ -184,23 +184,33 @@ class GmailService:
 
             body_data = self.get_email_body(message_id)
 
-            # ========== ADDED: Gmail label extraction ==========
-            label_ids = message.get('labelIds', [])
-            gmail_tag = '----'
+            # ========== GMAIL LABEL → NORMALIZÁLT TAG ==========
+            label_ids = message.get('labelIds', []) or []
 
-            if label_ids:
-                sortify_categories = [
-                    "Vezetőség", "Hiányos", "Hibás csatolmány", "Hírlevél",
-                    "Neptun", "Tanulói", "Milton", "Moodle", "Egyéb"
-                ]
+            label_map = self.get_label_map()  # id -> name
 
-                label_map = self.get_label_map()  # cache-elt címkék
+            # Label-név → belső tag mapping (EZ A LÉNYEG)
+            label_name_to_internal_tag = {
+                "Vezetőség": "vezetoseg",
+                "Vezetoseg": "vezetoseg",
+                "Neptun": "neptun",
+                "Moodle": "moodle",
+                "Milton": "milt-on",
+                "Hiányos": "hianyos",
+                "Hianyos": "hianyos",
+                "Egyéb": "egyeb",
+                "Egyeb": "egyeb",
+                # ha később kell:
+                "Hírlevél": "egyeb",
+                "Tanulói": "egyeb",
+            }
 
-                for label_id in label_ids:
-                    label_name = label_map.get(label_id, '')
-                    if label_name in sortify_categories:
-                        gmail_tag = label_name.lower()
-                        break
+            tag_internal = "----"
+            for lid in label_ids:
+                name = label_map.get(lid, "")
+                if name in label_name_to_internal_tag:
+                    tag_internal = label_name_to_internal_tag[name]
+                    break
             # ====================================================
 
             return {
@@ -213,13 +223,14 @@ class GmailService:
                 'mime_types': '|'.join(mime_types) if mime_types else '',
                 'body_plain': body_data.get('plain', ''),
                 'body_html': body_data.get('html', ''),
-                'tag': gmail_tag,  # ← ADDED
+                'tag': tag_internal,
                 'is_last_downloaded': 1
             }
 
         except HttpError as error:
             print(f'Error fetching email {message_id}: {error}')
             return None
+
 
     def send_message(self, to, subject, body):
         """Send an email message"""
@@ -241,12 +252,84 @@ class GmailService:
             print(f'An error occurred: {error}')
             return None
 
+    def set_message_label(self, message_id: str, new_internal_tag: str) -> None:
+        """
+        Átállítja az adott üzenet Sortify-címkéjét Gmailben:
+        leveszi az összes Sortify-labelt, és felrakja az újat.
+        """
+        if not self.service:
+            return
+
+        # 1) Label ID → név cache már van: get_label_map()
+        label_map = self.get_label_map()              # id -> name
+        name_to_id = {v: k for k, v in label_map.items()}  # név -> id
+
+        # 2) Belső tag -> Gmail label NÉV
+        internal_to_label_name = {
+            "vezetoseg": "Vezetőség",
+            "tanszek": "Tanszék",
+            "neptun": "Neptun",
+            "moodle": "Moodle",
+            "milt-on": "Milton",
+            "hianyos": "Hiányos",
+            "egyeb": "Egyéb",
+        }
+
+        if new_internal_tag not in internal_to_label_name:
+            # ha ---- vagy ismeretlen → csak levesszük a Sortify label-eket
+            target_label_name = None
+        else:
+            target_label_name = internal_to_label_name[new_internal_tag]
+
+        # 3) Sortify label nevek, amiket LE KELL VENNI
+        sortify_label_names = {
+            "Vezetőség", "Tanszék", "Neptun", "Moodle",
+            "Milton", "Hiányos", "Egyéb",
+        }
+        sortify_label_ids = [name_to_id[n] for n in sortify_label_names if n in name_to_id]
+
+        # Céllabel meghatározása
+        add_ids = []
+        if target_label_name:
+            target_id = name_to_id.get(target_label_name)
+            if target_id:
+                add_ids.append(target_id)
+        else:
+            target_id = None
+
+        # NE távolítsuk el azt a labelt, amit épp felteszünk
+        if target_id:
+            remove_ids = [lid for lid in sortify_label_ids if lid != target_id]
+        else:
+            remove_ids = sortify_label_ids
+
+        body = {
+            "addLabelIds": add_ids,
+            "removeLabelIds": remove_ids,
+        }
+
+        try:
+            self.service.users().messages().modify(
+                userId="me",
+                id=message_id,
+                body=body
+            ).execute()
+            print(f"[GMAIL] Labels updated for {message_id}: add={add_ids}, remove={remove_ids}")
+        except Exception as e:
+            print(f"[GMAIL] Failed to update labels for {message_id}: {e}")
+
+
     def get_label_map(self):
         """Get all Gmail labels (cached) - ADDED from branch1"""
         if self._label_cache is None:
             try:
                 labels_response = self.service.users().labels().list(userId='me').execute()
                 self._label_cache = {lbl['id']: lbl['name'] for lbl in labels_response.get('labels', [])}
+
+                # DEBUG: írd ki az összes labelt
+                print("[GMAIL][LABELS]")
+                for lid, name in self._label_cache.items():
+                    print("   ", lid, "->", repr(name))
             except Exception as e:
                 print(f"[GMAIL] Label cache error: {e}")
                 self._label_cache = {}

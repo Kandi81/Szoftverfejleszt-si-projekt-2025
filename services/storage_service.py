@@ -218,65 +218,108 @@ class StorageService:
             return []
 
     def sync_emails(self, new_emails: List[Dict]) -> List[Dict]:
-        """Sync new emails with existing storage"""
+        """Sync new emails with existing storage. Gmail a golden source a metaadatokra és címkékre."""
         self._update_mode()
 
         print(f"[STORAGE] sync_emails() called with {len(new_emails)} new emails")
 
-        # Load existing emails
+        # 1) Betöltjük a meglévő emaileket CSV-ből
         existing_emails = self.load_emails()
-        existing_ids = {e['message_id'] for e in existing_emails}
+        existing_by_id = {e.get("message_id"): e for e in existing_emails}
 
-        # Reset is_last_downloaded flag for all existing emails
+        # 2) Minden meglévőnél lenullázzuk az is_last_downloaded flag-et
         for email in existing_emails:
-            email['is_last_downloaded'] = 0
+            email["is_last_downloaded"] = 0
 
-        # Add new emails and save their bodies
-        newly_added = []
-        for email in new_emails:
-            if email['message_id'] not in existing_ids:
-                print(f"[STORAGE] Processing new email: {email['message_id']}")
+        updated_or_new: List[Dict] = []
 
-                # Save body to file
-                body_plain = email.pop('body_plain', '')
-                body_html = email.pop('body_html', '')
+        for fresh in new_emails:
+            msg_id = fresh.get("message_id")
+            if not msg_id:
+                print("[STORAGE] Skipping email without message_id")
+                continue
 
-                print(f"[STORAGE]   body_plain length: {len(body_plain)}")
-                print(f"[STORAGE]   body_html length: {len(body_html)}")
+            # BODY-t vegyük ki külön, hogy fájlba írást egységesen kezeljük
+            fresh_body_plain = fresh.pop("body_plain", "")
+            fresh_body_html = fresh.pop("body_html", "")
+
+            if msg_id in existing_by_id:
+                # ===== MEGLÉVŐ EMAIL: GMAIL FELÜLÍRJA A METAADATOT + TAG-ET =====
+                stored = existing_by_id[msg_id]
+
+                # Ezeket MINDIG frissítjük a Gmail alapján
+                fields_from_gmail = [
+                    "sender", "sender_name", "sender_domain",
+                    "subject", "datetime",
+                    "attachment_count", "attachment_names",
+                    "mime_types", "tag",
+                    "needs_more_info", "rule_applied",
+                ]
+                for key in fields_from_gmail:
+                    if key in fresh:
+                        stored[key] = fresh[key]
+
+                # AI summary-t akkor írjuk felül, ha a Gmail-ből tényleg jön új (gyakorlatilag soha)
+                if fresh.get("ai_summary"):
+                    stored["ai_summary"] = fresh["ai_summary"]
+
+                # BODY file: GMAIL a golden source → újraírjuk a body-t is
+                body_file, body_format = self.save_body_to_file(
+                    msg_id,
+                    fresh_body_plain,
+                    fresh_body_html,
+                )
+                stored["body_file"] = body_file
+                stored["body_format"] = body_format
+
+                if body_file:
+                    body_html_loaded, body_plain_loaded = self.load_body_from_file_raw(body_file)
+                    stored["body_html"] = body_html_loaded
+                    stored["body_plain"] = body_plain_loaded
+                else:
+                    stored["body_html"] = ""
+                    stored["body_plain"] = ""
+
+                stored["is_last_downloaded"] = 1
+                updated_or_new.append(stored)
+            else:
+                # ===== ÚJ EMAIL =====
+                print(f"[STORAGE] Processing NEW email: {msg_id}")
 
                 body_file, body_format = self.save_body_to_file(
-                    email['message_id'],
-                    body_plain,
-                    body_html
+                    msg_id,
+                    fresh_body_plain,
+                    fresh_body_html,
                 )
 
-                print(f"[STORAGE]   Saved to: {body_file} (format: {body_format})")
+                fresh["body_file"] = body_file
+                fresh["body_format"] = body_format
+                fresh["is_last_downloaded"] = 1
 
-                email['body_file'] = body_file
-                email['body_format'] = body_format
-                email['is_last_downloaded'] = 1
-
-                # Load body content for in-memory use (RAW - don't strip)
                 if body_file:
-                    body_html, body_plain = self.load_body_from_file_raw(body_file)
-                    email['body_html'] = body_html
-                    email['body_plain'] = body_plain
+                    body_html_loaded, body_plain_loaded = self.load_body_from_file_raw(body_file)
+                    fresh["body_html"] = body_html_loaded
+                    fresh["body_plain"] = body_plain_loaded
                 else:
-                    email['body_html'] = ""
-                    email['body_plain'] = ""
+                    fresh["body_html"] = ""
+                    fresh["body_plain"] = ""
 
-                newly_added.append(email)
-            else:
-                print(f"[STORAGE] Email {email['message_id']} already exists, skipping")
+                updated_or_new.append(fresh)
 
-        # Combine all emails
-        all_emails = existing_emails + newly_added
+        # 3) Azok, amiket most NEM érintett a Gmail (pl. régi, archív mappa stb.), maradjanak
+        untouched = [
+            e for e in existing_emails
+            if e.get("message_id") not in {n.get("message_id") for n in updated_or_new}
+        ]
 
-        # Save to CSV
+        all_emails = updated_or_new + untouched
+
+        # 4) Mentés CSV-be
         self._save_to_csv(all_emails)
 
-        print(f"[STORAGE] Synced {len(newly_added)} new emails. Total: {len(all_emails)}")
+        print(f"[STORAGE] Synced {len(updated_or_new)} emails from Gmail. Total stored: {len(all_emails)}")
         return all_emails
+
 
     def save_emails(self, emails: List[Dict]) -> None:
         """Save emails to CSV (used after categorization)
