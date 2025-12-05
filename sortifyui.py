@@ -105,7 +105,6 @@ def update_tag_counts_from_storage(emails):
     )
 
 
-
 def update_attachment_button_count(_emails):
     count = app_state.get_attachment_count()
     btnattachfilter.config(text=f"Csatolmány ({count})")
@@ -276,59 +275,61 @@ def update_details_panel(email_data):
         import re
         attachments = [a.strip() for a in re.split(r'[;|]', attachment_names) if a.strip()]
     elif isinstance(attachment_names, list):
-        attachments = [str(a).strip() for a in attachment_names if str(a).strip()]
+        attachments = attachment_names
 
-    for idx, filename in enumerate(attachments[:3]):
-        display_name = truncate_filename(filename, max_length=20)
+    for i in range(min(3, len(attachments))):
+        filename = attachments[i]
         is_safe, reason = verify_attachment_safety(email_id, filename)
-        att_tab = tk.Frame(notebook, bg="#FFFFFF")
 
-        tab_text = f"✅ {display_name}" if is_safe else f"⚠️ {display_name}"
-        notebook.add(att_tab, text=tab_text)
+        tab_frame = detail_widgets[f'attachment_tab_{i + 1}']
+        notebook.add(tab_frame, text=f"📎 {i + 1}")
 
-        att_text = tk.Text(
-            att_tab,
-            wrap=tk.WORD,
-            state='disabled',
-            bg="#FFFFFF",
-            font=("Segoe UI", 10),
-            relief="flat"
-        )
-        att_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        for widget in tab_frame.winfo_children():
+            widget.destroy()
 
-        att_text.config(state='normal')
-        if not is_safe:
-            att_text.tag_configure("warning_header", background="#F8D7DA", foreground="#721C24",
-                                   font=("Segoe UI", 11, "bold"))
-            att_text.insert('1.0', "⚠️ FIGYELEM: Gyanús csatolmány!\n\n", "warning_header")
-            att_text.insert('end',
-                            f"📎 Fájl: {filename}\n\n"
-                            f"🔍 Probléma: {reason}\n\n"
-                            f"⚠️ JAVASOLT TEENDŐ:\n"
-                            f"• Ne nyissa meg ezt a fájlt!\n"
-                            f"• Ellenőrizze a feladóval telefonon/személyesen\n"
-                            f"• Jelentse a biztonsági csapatnak\n"
-                            f"• Törölje az emailt ha nem várt\n")
-        else:
-            att_text.tag_configure("safe_header", background="#D4EDDA", foreground="#155724",
-                                   font=("Segoe UI", 11, "bold"))
-            att_text.insert('1.0', f"✅ Biztonságos csatolmány\n\n", "safe_header")
-            att_text.insert('end',
-                            f"📎 Fájl: {filename}\n\n"
-                            f"✓ A fájl automatikus ellenőrzésen átment\n"
-                            f"✓ Nem tartalmaz gyanús kiterjesztést\n\n"
-                            f"[AI összefoglaló a csatolmány tartalmáról - funkció fejlesztés alatt]")
-        att_text.config(state='disabled')
+        header_frame = tk.Frame(tab_frame, bg='white')
+        header_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        status_emoji = "✅" if is_safe else "⚠️"
+        status_text = "Biztonságos" if is_safe else "GYANÚS"
+        status_color = "#28a745" if is_safe else "#dc3545"
+
+        status_label = tk.Label(header_frame, text=f"{status_emoji} {status_text}",
+                                font=("Arial", 11, "bold"), fg=status_color, bg='white')
+        status_label.pack(anchor='w')
+
+        filename_label = tk.Label(header_frame, text=filename, font=("Arial", 10),
+                                  bg='white', fg='#333', wraplength=380, justify='left')
+        filename_label.pack(anchor='w', pady=(5, 0))
+
+        if not is_safe and reason:
+            reason_frame = tk.Frame(tab_frame, bg='#fff3cd', relief=tk.SOLID, borderwidth=1)
+            reason_frame.pack(fill=tk.X, padx=10, pady=10)
+
+            reason_label = tk.Label(reason_frame, text=f"⚠️  {reason}",
+                                    font=("Arial", 9), bg='#fff3cd', fg='#856404',
+                                    wraplength=380, justify='left')
+            reason_label.pack(padx=10, pady=10)
 
 
 def on_tree_select(_event=None):
+    """Handle TreeView selection change"""
     selected_items = treeemails.selection()
 
+    # Update categorize button state
     if selected_items and not app_state.is_filtered:
         btncategorize.config(state="normal")
     else:
         btncategorize.config(state="disabled")
 
+    # ========== ADDED: Enable AI button for single selection ==========
+    if len(selected_items) == 1:
+        btnailabel.config(state="normal")
+    else:
+        btnailabel.config(state="disabled")
+    # ====================================================================
+
+    # Update details panel
     if len(selected_items) == 1:
         item_id = selected_items[0]
         email_data = app_state.email_data_map.get(item_id, {})
@@ -337,14 +338,159 @@ def on_tree_select(_event=None):
         update_details_panel(None)
 
 
-def generate_summary_for_selected_single():
+def on_tag_dropdown_change(event):
+    """Handle tag dropdown change with auto-save"""
+    if email_controller is None:
+        return
+
+    selected_items = treeemails.selection()
+    if len(selected_items) != 1:
+        return
+
+    item_id = selected_items[0]
+    email_data = app_state.email_data_map.get(item_id, {})
+    if not email_data:
+        return
+
+    selected_display = detail_widgets['tag_var'].get()
+
+    tag_reverse_map = {
+        'Vezetőség': 'vezetoseg',
+        'Tanszék': 'tanszek',
+        'Neptun': 'neptun',
+        'Moodle': 'moodle',
+        'Milt-On': 'milt-on',
+        'Hiányos': 'hianyos'
+    }
+
+    new_tag = tag_reverse_map.get(selected_display, '----')
+
+    old_tag = email_data.get('tag', '----')
+    if new_tag == old_tag:
+        return
+
+    email_data['tag'] = new_tag
+
+    email_controller.update_tag_for_email(email_data)
+
+    current_values = list(treeemails.item(item_id, "values"))
+    current_values[2] = new_tag
+    treeemails.item(item_id, values=current_values)
+
+    update_tag_counts_from_storage(app_state.all_emails)
+
+    print(f"[TAG] Auto-saved: {old_tag} → {new_tag}")
+
+
+def toggle_select_all():
+    if select_all_var.get():
+        for item_id in app_state.all_tree_items:
+            treeemails.selection_add(item_id)
+    else:
+        treeemails.selection_remove(treeemails.get_children())
+
+
+def get_emails(_event):
+    """Fetch new emails from Gmail (using email_controller)"""
+    if email_controller is None:
+        messagebox.showerror("Hiba", "Email controller not initialized")
+        return
+
+    if not auth_controller or not auth_controller.is_authenticated():
+        messagebox.showwarning("Figyelmeztetés", "Kérjük, először jelentkezzen be!")
+        return
+
+    if app_state.is_test_mode():
+        messagebox.showinfo("Teszt mód",
+                            "Teszt adatállomány (emails_mod.csv) van betöltve.\n"
+                            "Frissítés le van tiltva, hogy ne írjuk felül a teszt adatokat.")
+        return
+
+    pbaremails.config(value=0)
+    pbaremails.place(x=560, y=14, width=200, height=22)
+    windowsortify.update()
+
+    try:
+        def update_progress(value):
+            pbaremails.config(value=value)
+            windowsortify.update()
+
+        synced_emails = email_controller.fetch_new_emails(
+            max_results=100,
+            progress_callback=update_progress
+        )
+
+        if synced_emails:
+            populate_tree_from_emails(synced_emails)
+            update_tag_counts_from_storage(synced_emails)
+            update_attachment_button_count(synced_emails)
+            chkselectall.config(state="normal")
+
+        pbaremails.config(value=100)
+        windowsortify.update()
+
+    except Exception as e:
+        messagebox.showerror("Hiba", f"Email letöltési hiba: {e}")
+    finally:
+        pbaremails.place_forget()
+
+
+def filter_by_tag(tag_name):
+    """Filter treeview to show only items with the specified tag"""
+    if email_controller is None:
+        return
+
+    visible_items = email_controller.filter_by_tag(
+        tag_name,
+        app_state.all_tree_items,
+        treeemails
+    )
+
+    treeemails.selection_remove(treeemails.get_children())
+    filter_status_label.config(text=f"Szűrő: {tag_name.capitalize()}")
+    btncategorize.config(state="disabled")
+    btnclearfilters.place(x=919, y=636, width=80, height=40)
+
+
+def filter_by_attachment():
+    """Filter emails with attachments"""
+    if email_controller is None:
+        return
+
+    visible_items = email_controller.filter_by_attachment(
+        app_state.all_tree_items,
+        treeemails
+    )
+
+    treeemails.selection_remove(treeemails.get_children())
+    filter_status_label.config(text="Szűrő: Csatolmány")
+    btncategorize.config(state="disabled")
+    btnclearfilters.place(x=919, y=636, width=80, height=40)
+
+
+def clear_filters():
+    """Clear all filters"""
+    if email_controller is None:
+        return
+
+    email_controller.clear_filters(app_state.all_tree_items, treeemails)
+
+    treeemails.selection_remove(treeemails.get_children())
+    filter_status_label.config(text="")
+    btncategorize.config(state="disabled")
+    btnclearfilters.place_forget()
+
+
+def ai_label_single_email():
+    """AI-based labeling for single selected email - ADDED"""
     if ai_controller is None:
         messagebox.showerror("Hiba", "AI controller not initialized")
         return
 
     selected_items = treeemails.selection()
     if len(selected_items) != 1:
-        messagebox.showinfo("Info", "Válasszon ki pontosan egy emailt az AI összefoglaló generálásához.")
+        messagebox.showinfo("Info",
+                            "Válasszon ki pontosan egy emailt az AI címkézéshez.")
         return
 
     if not get_ai_consent():
@@ -357,542 +503,378 @@ def generate_summary_for_selected_single():
     if not email_data:
         return
 
-    if email_data.get('ai_summary'):
-        result = messagebox.askyesno("Megerősítés",
-                                     "Ez az email már rendelkezik AI összefoglalóval.\n\n"
-                                     "Újra generálod?")
-        if not result:
-            return
-
-    detail_widgets['ai_summary'].config(state='normal')
-    detail_widgets['ai_summary'].delete('1.0', tk.END)
-    detail_widgets['ai_summary'].insert('1.0', '⏳ Összefoglaló generálása folyamatban...')
-    detail_widgets['ai_summary'].config(state='disabled')
-    windowsortify.update()
-
-    print(f"[AI] Generating summary for '{email_data.get('subject', '')}'...")
-    summary = ai_controller.generate_summary(email_data)
-    if not summary:
-        summary = "[Hiba: nem sikerült összefoglalót generálni]"
-
-    detail_widgets['ai_summary'].config(state='normal')
-    detail_widgets['ai_summary'].delete('1.0', tk.END)
-    detail_widgets['ai_summary'].insert('1.0', summary)
-    detail_widgets['ai_summary'].config(state='disabled')
-
-    values = list(treeemails.item(item_id, 'values'))
-    values[4] = AI_ICON
-    treeemails.item(item_id, values=values)
-
-    print(f"[AI] Summary generated successfully")
-
-
-def get_emails(_event):
-    if email_controller is None:
-        messagebox.showerror("Hiba", "Email controller not initialized")
-        return
-    if not auth_controller or not auth_controller.is_authenticated():
-        messagebox.showwarning("Figyelmeztetés", "Kérjük, először jelentkezzen be!")
-        return
-    if app_state.is_test_mode():
-        messagebox.showinfo("Teszt mód",
-                            "Teszt adatállomány (emails_mod.csv) van betöltve.\n"
-                            "Frissítés le van tiltva, hogy ne írjuk felül a teszt adatokat.")
+    result = messagebox.askyesno("Megerősítés",
+                                 f"AI alapú címkézés futtatása erre az emailre?\n\n"
+                                 f"Tárgy: {email_data.get('subject', '')[:50]}")
+    if not result:
         return
 
-    lbl_progress_status.config(text="Letöltés...")
-    lbl_progress_status.place(x=370, y=14, width=90, height=22)
-
-    pbaremails.config(value=0)
-    pbaremails.place(x=470, y=14, width=150, height=22)
-
-    lbl_progress_percent.config(text="0%")
-    lbl_progress_percent.place(x=630, y=14, width=40, height=22)
-
-    windowsortify.update()
+    print(f"[AI-LABEL] Running for '{email_data.get('subject', '')}'...")
 
     try:
-        def update_progress(value, current=None, total=None):
-            pbaremails.config(value=value)
-            lbl_progress_percent.config(text=f"{int(value)}%")
-            if current is not None and total is not None:
-                lbl_progress_status.config(text=f"Letöltés ({current}/{total})")
-            windowsortify.update()
+        ai_controller.auto_label_email(email_data)
 
-        synced_emails = email_controller.fetch_new_emails(
-            max_results=100,
-            progress_callback=update_progress
-        )
+        current_values = list(treeemails.item(item_id, "values"))
+        current_values[2] = email_data.get("tag", "----")
+        treeemails.item(item_id, values=current_values)
 
-        if synced_emails:
-            app_state.all_emails = synced_emails
-            populate_tree_from_emails(synced_emails)
-            update_tag_counts_from_storage(synced_emails)
-            update_attachment_button_count(synced_emails)
-            chkselectall.config(state="normal")
+        update_details_panel(email_data)
 
-        pbaremails.config(value=100)
-        lbl_progress_percent.config(text="100%")
-        lbl_progress_status.config(text="Kész!")
-        windowsortify.update()
+        # Save to CSV
+        email_controller.update_tag_for_email(email_data)
 
+        update_tag_counts_from_storage(app_state.all_emails)
+
+        messagebox.showinfo("Siker",
+                            f"AI címkézés kész!\n\n"
+                            f"Új címke: {email_data.get('tag', '----')}")
     except Exception as e:
-        messagebox.showerror("Hiba", f"Email letöltési hiba: {e}")
-    finally:
-        windowsortify.after(1500, lambda: lbl_progress_status.place_forget())
-        windowsortify.after(1500, lambda: pbaremails.place_forget())
-        windowsortify.after(1500, lambda: lbl_progress_percent.place_forget())
-
-
-def filter_by_tag(tag_name):
-    if email_controller is None:
-        return
-
-    email_controller.filter_by_tag(
-        tag_name,
-        app_state.all_tree_items,
-        treeemails
-    )
-
-    treeemails.selection_remove(treeemails.get_children())
-    btncategorize.config(state="disabled")
-    btnclearfilters.place(x=851, y=636, width=150, height=30)
-
-
-def filter_by_attachment():
-    if email_controller is None:
-        return
-
-    email_controller.filter_by_attachment(
-        app_state.all_tree_items,
-        treeemails
-    )
-
-    treeemails.selection_remove(treeemails.get_children())
-    btncategorize.config(state="disabled")
-    btnclearfilters.place(x=851, y=636, width=150, height=30)
-
-
-def clear_filters():
-    if email_controller is None:
-        return
-
-    email_controller.clear_filters(app_state.all_tree_items, treeemails)
-    treeemails.selection_remove(treeemails.get_children())
-    btncategorize.config(state="disabled")
-    btnclearfilters.place_forget()
+        messagebox.showerror("Hiba", f"AI címkézés sikertelen:\n{e}")
 
 
 def categorize_emails():
+    """Categorize selected emails using rule engine - KEPT from main"""
     if email_controller is None:
         messagebox.showerror("Hiba", "Email controller not initialized")
         return
 
     selected_items = treeemails.selection()
     if not selected_items:
-        messagebox.showinfo("Info",
-                            "Nincs kiválasztott email.\n\nVálasszon ki egy vagy több emailt a kategorizáláshoz.")
+        messagebox.showinfo("Info", "Válasszon ki legalább egy emailt a kategorizáláshoz.")
         return
 
-    selected_emails = [app_state.email_data_map[item] for item in selected_items if item in app_state.email_data_map]
-    count = email_controller.categorize_selected_emails(selected_emails)
+    selected_emails = [app_state.email_data_map.get(item) for item in selected_items]
+    selected_emails = [e for e in selected_emails if e]
 
-    if count > 0:
-        populate_tree_from_emails(app_state.all_emails)
-        update_tag_counts_from_storage(app_state.all_emails)
-
-    treeemails.selection_remove(treeemails.get_children())
-
-
-def sort_tree_by_column(col_name):
-    if email_controller is None:
+    if not selected_emails:
         return
 
-    if app_state.sort_column == col_name:
-        app_state.sort_reverse = not app_state.sort_reverse
-    else:
-        app_state.sort_column = col_name
-        app_state.sort_reverse = False
-
-    sorted_items = email_controller.sort_emails(col_name, app_state.sort_reverse)
-
-    for idx, (item_id, _) in enumerate(sorted_items):
-        treeemails.move(item_id, "", idx)
-
-    for col in ["Sender", "Subject", "Tag", "Attach", "AI", "Date"]:
-        header_text = {
-            "Sender": "Feladó",
-            "Subject": "Email",
-            "Tag": "Cimke",
-            "Attach": attach_header,
-            "AI": "✨",
-            "Date": "Dátum"
-        }[col]
-
-        if col == col_name:
-            arrow = " ▼" if app_state.sort_reverse else " ▲"
-            treeemails.heading(col, text=header_text + arrow)
-        else:
-            treeemails.heading(col, text=header_text)
-
-
-def select_all():
-    is_checked = select_all_var.get()
-    if is_checked:
-        treeemails.selection_set(treeemails.get_children())
-    else:
-        treeemails.selection_remove(treeemails.get_children())
-
-
-def uncheck_select_all_checkbox(_event):
-    select_all_var.set(False)
-
-
-def open_settings():
-    from settings_ui import SettingsWindow
-    SettingsWindow(windowsortify)
-
-
-def update_get_emails_button_state():
-    if auth_controller and auth_controller.can_refresh_emails():
-        btngetmails.config(state="normal")
-    else:
-        btngetmails.config(state="disabled")
-
-
-def session_login():
-    if auth_controller is None:
-        messagebox.showerror("Hiba", "Auth controller not initialized")
+    result = messagebox.askyesno("Megerősítés",
+                                 f"Kategorizálás futtatása {len(selected_emails)} kijelölt emailre?")
+    if not result:
         return
 
-    if btnsession.cget("text") == "Kijelentkezés":
-        auth_controller.logout()
-        btnsession.config(text="Bejelentkezés")
-        update_get_emails_button_state()
-    else:
-        gmail_client = auth_controller.login()
-        if gmail_client and email_controller:
-            email_controller.gmail = gmail_client
-        if gmail_client:
-            btnsession.config(text="Kijelentkezés")
-            update_get_emails_button_state()
+    categorized = email_controller.categorize_selected_emails(selected_emails)
 
-
-def check_initial_login_state():
-    if auth_controller is None:
-        btnsession.config(text="Bejelentkezés")
-        update_get_emails_button_state()
-        return
-
-    gmail_client = auth_controller.check_auto_login()
-    if gmail_client and email_controller:
-        email_controller.gmail = gmail_client
-
-    btnsession.config(text="Kijelentkezés" if gmail_client else "Bejelentkezés")
-    update_get_emails_button_state()
-
-
-def on_key_press(event):
-    if event.state == 4 and event.keysym.lower() == 'r':
-        if auth_controller and auth_controller.can_refresh_emails():
-            get_emails(None)
-    elif event.keysym == 'Escape':
-        if app_state.is_filtered:
-            clear_filters()
-
-
-windowsortify = tk.Tk()
-windowsortify.title("Sortify v0.6.0")
-windowsortify.config(bg="#E4E2E2")
-windowsortify.geometry("1724x743")
-
-style = ttk.Style(windowsortify)
-style.theme_use("clam")
-
-frameactionbar = tk.Frame(master=windowsortify)
-frameactionbar.config(bg="#EDECEC")
-frameactionbar.place(x=8, y=0, width=1710, height=55)
-
-framemain = tk.Frame(master=windowsortify)
-framemain.config(bg="#EDECEC")
-framemain.place(x=5, y=59, width=1011, height=680)
-
-framedetails = tk.Frame(master=windowsortify, relief=tk.GROOVE, borderwidth=2)
-framedetails.config(bg="#F5F5F5")
-framedetails.place(x=1020, y=59, width=700, height=680)
-
-test_mode_label = tk.Label(master=framemain,
-                           text="",
-                           bg="#EDECEC",
-                           fg="#AA0000",
-                           anchor="w")
-test_mode_label.place(x=10, y=0, width=800, height=20)
-
-style.configure("btngetmails.TButton", background="#E4E2E2", foreground="#000")
-style.map("btngetmails.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
-
-btngetmails = ttk.Button(master=frameactionbar, text="Letöltés / Frissítés", style="btngetmails.TButton",
-                         state="disabled")
-btngetmails.bind("<Button-1>", get_emails)
-btngetmails.place(x=10, y=9, width=140, height=40)
-
-style.configure("btncategorize.TButton", background="#E4E2E2", foreground="#000")
-style.map("btncategorize.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
-
-btncategorize = ttk.Button(master=frameactionbar, text="Kategorizálás", style="btncategorize.TButton",
-                           command=categorize_emails, state="disabled")
-btncategorize.place(x=160, y=9, width=110, height=40)
-
-style.configure("chkselectall.TCheckbutton", background="#EDECEC", foreground="#000")
-select_all_var = tk.BooleanVar(value=False)
-chkselectall = ttk.Checkbutton(master=frameactionbar, text="Mind",
-                               style="chkselectall.TCheckbutton",
-                               variable=select_all_var,
-                               command=select_all,
-                               state="disabled")
-chkselectall.place(x=280, y=14, width=70, height=30)
-
-lbl_progress_status = tk.Label(master=frameactionbar,
-                               text="",
-                               bg="#EDECEC",
-                               fg="#333",
-                               font=("Segoe UI", 9),
-                               anchor="w")
-
-style.configure("btnsettings.TButton", background="#E4E2E2", foreground="#000", font=("Segoe UI Symbol", 16))
-style.map("btnsettings.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000")])
-
-btnsettings = ttk.Button(master=frameactionbar, text="⚙", style="btnsettings.TButton",
-                         command=open_settings)
-btnsettings.place(x=1565, y=9, width=40, height=40)
-
-style.configure("btnsession.TButton", background="#E4E2E2", foreground="#000")
-style.map("btnsession.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
-
-btnsession = ttk.Button(master=frameactionbar, text="Bejelentkezés", style="btnsession.TButton",
-                        command=session_login)
-btnsession.place(x=1609, y=9, width=90, height=40)
-
-style.configure("btntagvezetosegi.TButton", background="#E4E2E2", foreground="#000")
-btntagvezetosegi = ttk.Button(master=framemain, text="Vezetoseg (0)", style="btntagvezetosegi.TButton",
-                              state="disabled", command=lambda: filter_by_tag("vezetoseg"))
-btntagvezetosegi.place(x=9, y=636, width=120, height=30)
-
-style.configure("btntagtanszek.TButton", background="#E4E2E2", foreground="#000")
-btntagtanszek = ttk.Button(master=framemain, text="Tanszék (0)", style="btntagtanszek.TButton",
-                           state="disabled", command=lambda: filter_by_tag("tanszek"))
-btntagtanszek.place(x=139, y=636, width=90, height=30)
-
-style.configure("btntagneptun.TButton", background="#E4E2E2", foreground="#000")
-btntagneptun = ttk.Button(master=framemain, text="Neptun (0)", style="btntagneptun.TButton",
-                          state="disabled", command=lambda: filter_by_tag("neptun"))
-btntagneptun.place(x=239, y=636, width=90, height=30)
-
-style.configure("btntagmoodle.TButton", background="#E4E2E2", foreground="#000")
-btntagmoodle = ttk.Button(master=framemain, text="Moodle (0)", style="btntagmoodle.TButton",
-                          state="disabled", command=lambda: filter_by_tag("moodle"))
-btntagmoodle.place(x=339, y=636, width=90, height=30)
-
-style.configure("btntagmilton.TButton", background="#E4E2E2", foreground="#000")
-btntagmilton = ttk.Button(master=framemain, text="Milt-On (0)", style="btntagmilton.TButton",
-                          state="disabled", command=lambda: filter_by_tag("milt-on"))
-btntagmilton.place(x=439, y=636, width=90, height=30)
-
-style.configure("btntaghianyos.TButton", background="#E4E2E2", foreground="#000")
-btntaghianyos = ttk.Button(master=framemain, text="Hiányos (0)", style="btntaghianyos.TButton",
-                           state="disabled", command=lambda: filter_by_tag("hianyos"))
-btntaghianyos.place(x=539, y=636, width=90, height=30)
-
-style.configure("btnattachfilter.TButton", background="#E4E2E2", foreground="#000")
-btnattachfilter = ttk.Button(master=framemain, text="Csatolmány (0)", style="btnattachfilter.TButton",
-                             command=filter_by_attachment)
-btnattachfilter.place(x=639, y=636, width=110, height=30)
-
-style.configure("btnclearfilters.TButton", background="#E4E2E2", foreground="#000")
-btnclearfilters = ttk.Button(master=framemain, text="Szűrők törlése", style="btnclearfilters.TButton",
-                             command=clear_filters)
-
-style.configure("pbaremails.Horizontal.TProgressbar",
-                background="#90EE90",
-                troughcolor="#E4E2E2")
-
-pbaremails = ttk.Progressbar(master=frameactionbar,
-                             style="pbaremails.Horizontal.TProgressbar",
-                             value=0)
-pbaremails.config(orient="horizontal", mode="determinate", length=150)
-
-lbl_progress_percent = tk.Label(master=frameactionbar,
-                                text="",
-                                bg="#EDECEC",
-                                fg="#333",
-                                font=("Segoe UI", 9, "bold"),
-                                anchor="w")
-
-style.configure("treeemails.Treeview.Heading", background="#E0E0E0", foreground="#000000")
-style.configure("treeemails.Treeview", background="#FFFFFF", foreground="#000", font=("", 12))
-style.map("treeemails.Treeview", background=[("selected", "#0078D7")])
-
-treeemails = ttk.Treeview(master=framemain, selectmode="extended", style="treeemails.Treeview")
-treeemails.config(columns=("Sender", "Subject", "Tag", "Attach", "AI", "Date"), show='headings')
-treeemails.bind("<Button-1>", uncheck_select_all_checkbox)
-treeemails.bind("<<TreeviewSelect>>", on_tree_select)
-treeemails.place(x=9, y=20, width=991, height=606)
-
-treeemails.tag_configure('oddrow', background='#FFFFFF')
-treeemails.tag_configure('evenrow', background='#F5F5F5')
-
-attach_header = "📎"
-try:
-    attach_header.encode("utf-8")
-except Exception:
-    attach_header = "Att."
-
-treeemails.heading("Sender", text="Feladó", command=lambda: sort_tree_by_column("Sender"))
-treeemails.heading("Subject", text="Email", command=lambda: sort_tree_by_column("Subject"))
-treeemails.heading("Tag", text="Cimke", command=lambda: sort_tree_by_column("Tag"))
-treeemails.heading("Attach", text=attach_header, command=lambda: sort_tree_by_column("Attach"))
-treeemails.heading("AI", text="✨", command=lambda: sort_tree_by_column("AI"))
-treeemails.heading("Date", text="Dátum", command=lambda: sort_tree_by_column("Date"))
-
-treeemails.column("Sender", anchor="w", width=180)
-treeemails.column("Subject", anchor="w", width=420)
-treeemails.column("Tag", anchor="w", width=100)
-treeemails.column("Attach", anchor="center", width=40)
-treeemails.column("AI", anchor="center", width=40)
-treeemails.column("Date", anchor="center", width=170)
-
-lbl_sender = tk.Label(framedetails, text="Feladó:", bg="#F5F5F5", fg="#333", font=("", 10, "bold"), anchor="w")
-lbl_sender.place(x=10, y=10, width=60, height=25)
-
-lbl_sender_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#000", font=("", 10), anchor="w")
-lbl_sender_value.place(x=75, y=10, width=410, height=25)
-
-lbl_date_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#666", font=("", 9, "italic"), anchor="e")
-lbl_date_value.place(x=490, y=10, width=195, height=25)
-
-lbl_subject = tk.Label(framedetails, text="Tárgy:", bg="#F5F5F5", fg="#333", font=("", 10, "bold"), anchor="w")
-lbl_subject.place(x=10, y=40, width=50, height=25)
-
-lbl_subject_value = tk.Label(framedetails, text="", bg="#F5F5F5", fg="#000", font=("", 10), anchor="w",
-                              wraplength=620, justify="left")
-lbl_subject_value.place(x=65, y=40, width=620, height=25)
-
-tag_categories = ["Vezetőség", "Tanszék", "Neptun", "Moodle", "Milt-On", "Hiányos"]
-tag_var = tk.StringVar()
-tag_dropdown = ttk.Combobox(
-    framedetails,
-    textvariable=tag_var,
-    values=tag_categories,
-    state="readonly",
-    font=("", 9),
-    width=20
-)
-tag_dropdown.place(x=555, y=40, width=130, height=22)
-
-
-def on_tag_dropdown_change(event):
-    selected_items = treeemails.selection()
-    if not selected_items or len(selected_items) != 1:
-        return
-
-    item_id = selected_items[0]
-    email_data = app_state.email_data_map.get(item_id)
-    if not email_data:
-        return
-
-    display_tag = tag_var.get()
-    if not display_tag:
-        return
-
-    tag_map_reverse = {
-        'Vezetőség': 'vezetoseg',
-        'Tanszék': 'tanszek',
-        'Neptun': 'neptun',
-        'Moodle': 'moodle',
-        'Milt-On': 'milt-on',
-        'Hiányos': 'hianyos'
-    }
-    new_tag = tag_map_reverse.get(display_tag, display_tag.lower())
-
-    # UI objektum
-    email_data["tag"] = new_tag
-
-    # Treeview
-    current_values = list(treeemails.item(item_id, "values"))
-    current_values[2] = new_tag
-    treeemails.item(item_id, values=current_values)
-
-    # Perzisztálás controlleren keresztül
-    if email_controller:
-        email_controller.update_tag_for_email(email_data, new_tag)
+    for item_id in selected_items:
+        email_data = app_state.email_data_map.get(item_id, {})
+        if email_data:
+            current_values = list(treeemails.item(item_id, "values"))
+            current_values[2] = email_data.get("tag", "----")
+            treeemails.item(item_id, values=current_values)
 
     update_tag_counts_from_storage(app_state.all_emails)
 
+    messagebox.showinfo("Siker", f"Kategorizálás kész!\n\n{categorized} email frissítve.")
 
-tag_dropdown.bind("<<ComboboxSelected>>", on_tag_dropdown_change)
 
-lbl_ai_summary = tk.Label(framedetails, text="AI Összefoglaló:", bg="#F5F5F5", fg="#333",
-                          font=("", 10, "bold"), anchor="w")
-lbl_ai_summary.place(x=10, y=70, width=120, height=25)
+def generate_ai_summary():
+    """Generate AI summary for selected email"""
+    if ai_controller is None:
+        messagebox.showerror("Hiba", "AI controller not initialized")
+        return
 
-style.configure("btnaisummary.TButton", background="#E4E2E2", foreground="#000", font=("", 10))
-style.map("btnaisummary.TButton", background=[("active", "#E4E2E2")],
-          foreground=[("active", "#000")])
+    selected_items = treeemails.selection()
+    if len(selected_items) != 1:
+        messagebox.showinfo("Info", "Válasszon ki pontosan egy emailt az AI összefoglalóhoz.")
+        return
 
-btnaisummary = ttk.Button(framedetails, text="✨ Generálás", style="btnaisummary.TButton",
-                          command=generate_summary_for_selected_single)
-btnaisummary.place(x=590, y=68, width=100, height=28)
+    if not get_ai_consent():
+        result = show_ai_consent_dialog(windowsortify)
+        if not result:
+            return
 
-txt_ai_summary = tk.Text(framedetails, wrap="word", bg="#FFFACD", fg="#000",
-                         font=("", 10), relief="solid", borderwidth=1, state='disabled')
-txt_ai_summary.place(x=10, y=100, width=680, height=80)
+    item_id = selected_items[0]
+    email_data = app_state.email_data_map.get(item_id, {})
 
-notebook = ttk.Notebook(framedetails)
-notebook.place(x=10, y=190, width=680, height=480)
+    if not email_data:
+        return
 
-message_tab = tk.Frame(notebook, bg="#FFFFFF")
-notebook.add(message_tab, text="Üzenet")
+    if email_data.get('ai_summary'):
+        result = messagebox.askyesno("Megerősítés",
+                                     "Ez az email már rendelkezik AI összefoglalóval.\n\n"
+                                     "Újragenerálja?")
+        if not result:
+            return
 
-message_display = HTMLScrolledText(
-    message_tab,
-    html="<p style='color: #999;'>Válasszon ki egy emailt.</p>"
-)
-message_display.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    summary = ai_controller.generate_summary(email_data)
 
-detail_widgets = {
-    'sender_value': lbl_sender_value,
-    'subject_value': lbl_subject_value,
-    'date_value': lbl_date_value,
-    'tag_dropdown': tag_dropdown,
-    'tag_var': tag_var,
-    'ai_summary': txt_ai_summary,
-    'notebook': notebook,
-    'message_tab': message_tab,
-    'message_display': message_display
-}
+    if summary:
+        current_values = list(treeemails.item(item_id, "values"))
+        current_values[4] = AI_ICON
+        treeemails.item(item_id, values=current_values)
 
-windowsortify.bind("<Key>", on_key_press)
+        update_details_panel(email_data)
+
+        messagebox.showinfo("Siker", "AI összefoglaló sikeresen generálva!")
+
+
+def generate_batch_ai_summaries():
+    """Generate AI summaries for all emails"""
+    if ai_controller is None:
+        messagebox.showerror("Hiba", "AI controller not initialized")
+        return
+
+    if not get_ai_consent():
+        result = show_ai_consent_dialog(windowsortify)
+        if not result:
+            return
+
+    def progress_callback(current, total):
+        print(f"[AI BATCH] Processing {current}/{total}...")
+
+    summaries = ai_controller.generate_batch_summaries(
+        app_state.all_emails,
+        progress_callback=progress_callback
+    )
+
+    if summaries:
+        populate_tree_from_emails(app_state.all_emails)
+
+
+def sort_treeview(col, reverse):
+    """Sort TreeView by column"""
+    if email_controller is None:
+        return
+
+    email_controller.sort_emails(col, reverse, app_state.all_emails)
+
+    app_state.sort_column = col
+    app_state.sort_reverse = reverse
+
+    populate_tree_from_emails(app_state.all_emails)
 
 
 def initialize_ui():
-    if email_controller is None:
-        raise RuntimeError(
-            "\n\n"
-            "=" * 70 + "\n"
-            "ERROR: sortifyui.py cannot run standalone!\n"
-            "=" * 70 + "\n\n"
-            "sortifyui.py requires dependency injection from main.py\n\n"
-            "Controllers not injected. Please run:\n\n"
-            "    python main.py\n\n"
-            "=" * 70 + "\n"
-        )
+    """Initialize UI components and load data"""
+    global windowsortify, treeemails, pbaremails, chkselectall
+    global btncategorize, btnailabel, btnclearfilters, btnattachfilter
+    global btntagvezetosegi, btntagtanszek, btntagneptun, btntagmoodle, btntagmilton, btntaghianyos
+    global filter_status_label, test_mode_label, style
 
-    check_initial_login_state()
+    windowsortify = tk.Tk()
+    windowsortify.title("Sortify - Email Manager v0.6.0")
+    windowsortify.geometry("1400x850")
+    windowsortify.configure(bg="#f0f0f0")
+
+    style = ttk.Style()
+    style.theme_use('clam')
+
+    framemaincontainer = tk.Frame(master=windowsortify, bg="#f0f0f0")
+    framemaincontainer.place(x=10, y=10, width=1380, height=830)
+
+    frameactionbar = tk.Frame(master=framemaincontainer, bg="#E4E2E2")
+    frameactionbar.place(x=0, y=0, width=1380, height=60)
+
+    style.configure("btnsync.TButton", background="#E4E2E2", foreground="#000")
+    style.map("btnsync.TButton", background=[("active", "#E4E2E2")], foreground=[("active", "#000")])
+
+    btnsync = ttk.Button(master=frameactionbar, text="Frissítés", style="btnsync.TButton")
+    btnsync.place(x=10, y=9, width=110, height=40)
+    btnsync.bind("<Button-1>", get_emails)
+
+    style.configure("btncategorize.TButton", background="#E4E2E2", foreground="#000")
+    style.map("btncategorize.TButton", background=[("active", "#E4E2E2")],
+              foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
+
+    btncategorize = ttk.Button(master=frameactionbar, text="Kategorizálás", style="btncategorize.TButton",
+                               command=categorize_emails, state="disabled")
+    btncategorize.place(x=160, y=9, width=110, height=40)
+
+    # ========== ADDED: AI Címkézés button ==========
+    style.configure("btnailabel.TButton", background="#E4E2E2", foreground="#000")
+    style.map("btnailabel.TButton", background=[("active", "#E4E2E2")],
+              foreground=[("active", "#000"), ("disabled", "#a0a0a0")])
+
+    btnailabel = ttk.Button(master=frameactionbar, text="✨ AI Címkézés", style="btnailabel.TButton",
+                            command=lambda: ai_label_single_email(), state="disabled")
+    btnailabel.place(x=280, y=9, width=120, height=40)
+    # ================================================
+
+    pbaremails = ttk.Progressbar(master=frameactionbar, mode='determinate', maximum=100)
+
+    global select_all_var
+    select_all_var = tk.BooleanVar(value=False)
+    chkselectall = tk.Checkbutton(master=frameactionbar, text="Mind kijelölése",
+                                  variable=select_all_var, command=toggle_select_all,
+                                  bg="#E4E2E2", state="disabled")
+    chkselectall.place(x=1230, y=18, width=140, height=25)
+
+    test_mode_label = tk.Label(master=frameactionbar, text="", bg="#E4E2E2",
+                               fg="#ff6600", font=("Arial", 9, "bold"))
+    test_mode_label.place(x=800, y=20, width=400, height=20)
+
+    frameemaillist = tk.Frame(master=framemaincontainer, bg="white")
+    frameemaillist.place(x=0, y=60, width=1000, height=610)
+
+    treeemails_scroll = ttk.Scrollbar(frameemaillist, orient="vertical")
+    treeemails_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    columns = ("Feladó", "Tárgy", "Tag", "📎", "AI", "Dátum")
+    treeemails = ttk.Treeview(frameemaillist, columns=columns, show="headings",
+                              yscrollcommand=treeemails_scroll.set, selectmode="extended")
+    treeemails_scroll.config(command=treeemails.yview)
+
+    treeemails.heading("Feladó", text="Feladó", anchor=tk.W,
+                       command=lambda: sort_treeview("Feladó", not app_state.sort_reverse))
+    treeemails.heading("Tárgy", text="Tárgy", anchor=tk.W,
+                       command=lambda: sort_treeview("Tárgy", not app_state.sort_reverse))
+    treeemails.heading("Tag", text="Tag", anchor=tk.W,
+                       command=lambda: sort_treeview("Tag", not app_state.sort_reverse))
+    treeemails.heading("📎", text="📎", anchor=tk.CENTER)
+    treeemails.heading("AI", text="AI", anchor=tk.CENTER)
+    treeemails.heading("Dátum", text="Dátum", anchor=tk.W,
+                       command=lambda: sort_treeview("Dátum", not app_state.sort_reverse))
+
+    treeemails.column("Feladó", width=200, anchor=tk.W)
+    treeemails.column("Tárgy", width=400, anchor=tk.W)
+    treeemails.column("Tag", width=100, anchor=tk.W)
+    treeemails.column("📎", width=40, anchor=tk.CENTER)
+    treeemails.column("AI", width=40, anchor=tk.CENTER)
+    treeemails.column("Dátum", width=140, anchor=tk.W)
+
+    treeemails.tag_configure('evenrow', background='#f9f9f9')
+    treeemails.tag_configure('oddrow', background='#ffffff')
+
+    treeemails.pack(fill=tk.BOTH, expand=True)
+
+    treeemails.bind("<<TreeviewSelect>>", on_tree_select)
+
+    framefilters = tk.Frame(master=framemaincontainer, bg="#E4E2E2")
+    framefilters.place(x=0, y=670, width=1000, height=160)
+
+    filter_label = tk.Label(master=framefilters, text="Szűrők:", bg="#E4E2E2",
+                            font=("Arial", 10, "bold"))
+    filter_label.place(x=10, y=10, width=100, height=30)
+
+    style.configure("btnfilter.TButton", background="#E4E2E2", foreground="#000")
+    style.map("btnfilter.TButton", background=[("active", "#d0d0d0")],
+              foreground=[("disabled", "#a0a0a0")])
+
+    btntagvezetosegi = ttk.Button(master=framefilters, text="Vezetoseg (0)",
+                                  style="btnfilter.TButton",
+                                  command=lambda: filter_by_tag("vezetoseg"), state="disabled")
+    btntagvezetosegi.place(x=10, y=50, width=150, height=40)
+
+    btntagtanszek = ttk.Button(master=framefilters, text="Tanszék (0)",
+                               style="btnfilter.TButton",
+                               command=lambda: filter_by_tag("tanszek"), state="disabled")
+    btntagtanszek.place(x=170, y=50, width=150, height=40)
+
+    btntagneptun = ttk.Button(master=framefilters, text="Neptun (0)",
+                              style="btnfilter.TButton",
+                              command=lambda: filter_by_tag("neptun"), state="disabled")
+    btntagneptun.place(x=330, y=50, width=150, height=40)
+
+    btntagmoodle = ttk.Button(master=framefilters, text="Moodle (0)",
+                              style="btnfilter.TButton",
+                              command=lambda: filter_by_tag("moodle"), state="disabled")
+    btntagmoodle.place(x=490, y=50, width=150, height=40)
+
+    btntagmilton = ttk.Button(master=framefilters, text="Milt-On (0)",
+                              style="btnfilter.TButton",
+                              command=lambda: filter_by_tag("milt-on"), state="disabled")
+    btntagmilton.place(x=650, y=50, width=150, height=40)
+
+    btntaghianyos = ttk.Button(master=framefilters, text="Hiányos (0)",
+                               style="btnfilter.TButton",
+                               command=lambda: filter_by_tag("hianyos"), state="disabled")
+    btntaghianyos.place(x=810, y=50, width=150, height=40)
+
+    btnattachfilter = ttk.Button(master=framefilters, text="Csatolmány (0)",
+                                 style="btnfilter.TButton",
+                                 command=filter_by_attachment, state="disabled")
+    btnattachfilter.place(x=10, y=100, width=150, height=40)
+
+    filter_status_label = tk.Label(master=framefilters, text="", bg="#E4E2E2",
+                                   fg="#0066cc", font=("Arial", 9, "bold"))
+    filter_status_label.place(x=170, y=105, width=200, height=30)
+
+    btnclearfilters = ttk.Button(master=framefilters, text="Törlés",
+                                 style="btnfilter.TButton",
+                                 command=clear_filters)
+
+    framedetails = tk.Frame(master=framemaincontainer, bg="white", relief=tk.RIDGE, borderwidth=1)
+    framedetails.place(x=1010, y=60, width=370, height=770)
+
+    details_title = tk.Label(master=framedetails, text="Email Részletek", bg="white",
+                             font=("Arial", 12, "bold"))
+    details_title.pack(pady=10)
+
+    info_frame = tk.Frame(framedetails, bg="white")
+    info_frame.pack(fill=tk.X, padx=10, pady=5)
+
+    tk.Label(info_frame, text="Feladó:", bg="white", font=("Arial", 9, "bold")).grid(
+        row=0, column=0, sticky='w', pady=2)
+    sender_value = tk.Label(info_frame, text="", bg="white", font=("Arial", 9), wraplength=280, justify='left')
+    sender_value.grid(row=0, column=1, sticky='w', pady=2)
+
+    tk.Label(info_frame, text="Tárgy:", bg="white", font=("Arial", 9, "bold")).grid(
+        row=1, column=0, sticky='w', pady=2)
+    subject_value = tk.Label(info_frame, text="", bg="white", font=("Arial", 9), wraplength=280, justify='left')
+    subject_value.grid(row=1, column=1, sticky='w', pady=2)
+
+    tk.Label(info_frame, text="", bg="white", font=("Arial", 9, "bold")).grid(
+        row=2, column=0, sticky='w', pady=2)
+    date_value = tk.Label(info_frame, text="", bg="white", font=("Arial", 9))
+    date_value.grid(row=2, column=1, sticky='w', pady=2)
+
+    tag_frame = tk.Frame(info_frame, bg="white")
+    tag_frame.grid(row=3, column=0, columnspan=2, sticky='w', pady=5)
+
+    tk.Label(tag_frame, text="Címke:", bg="white", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+
+    tag_var = tk.StringVar()
+    tag_values = ["Vezetőség", "Tanszék", "Neptun", "Moodle", "Milt-On", "Hiányos"]
+    tag_dropdown = ttk.Combobox(tag_frame, textvariable=tag_var, values=tag_values,
+                                state="readonly", width=15)
+    tag_dropdown.pack(side=tk.LEFT)
+    tag_dropdown.bind("<<ComboboxSelected>>", on_tag_dropdown_change)
+
+    ai_summary_frame = tk.Frame(framedetails, bg="#f8f9fa")
+    ai_summary_frame.pack(fill=tk.BOTH, padx=10, pady=10, expand=False)
+
+    ai_header = tk.Frame(ai_summary_frame, bg="#f8f9fa")
+    ai_header.pack(fill=tk.X, pady=(5, 5))
+
+    tk.Label(ai_header, text="✨ AI Összefoglaló", bg="#f8f9fa",
+             font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+
+    btn_generate_ai = tk.Button(ai_header, text="✨", command=generate_ai_summary,
+                                bg="#007bff", fg="white", font=("Arial", 10, "bold"),
+                                relief=tk.FLAT, cursor="hand2", padx=8, pady=2)
+    btn_generate_ai.pack(side=tk.RIGHT, padx=5)
+
+    ai_summary_text = tk.Text(ai_summary_frame, height=4, wrap=tk.WORD,
+                              font=("Arial", 9), bg="white", relief=tk.SOLID, borderwidth=1)
+    ai_summary_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    ai_summary_text.config(state='disabled')
+
+    notebook = ttk.Notebook(framedetails)
+    notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    message_tab = tk.Frame(notebook, bg='white')
+    notebook.add(message_tab, text="Üzenet")
+
+    message_display = HTMLScrolledText(message_tab, html="<p>Válasszon egy emailt</p>")
+    message_display.pack(fill=tk.BOTH, expand=True)
+
+    attachment_tabs = []
+    for i in range(3):
+        tab = tk.Frame(notebook, bg='white')
+        attachment_tabs.append(tab)
+
+    detail_widgets['sender_value'] = sender_value
+    detail_widgets['subject_value'] = subject_value
+    detail_widgets['date_value'] = date_value
+    detail_widgets['tag_var'] = tag_var
+    detail_widgets['ai_summary'] = ai_summary_text
+    detail_widgets['notebook'] = notebook
+    detail_widgets['message_tab'] = message_tab
+    detail_widgets['message_display'] = message_display
+    for i in range(3):
+        detail_widgets[f'attachment_tab_{i + 1}'] = attachment_tabs[i]
+
     load_offline_emails()
 
-    if not get_ai_consent():
-        windowsortify.after(500, lambda: show_ai_consent_dialog(windowsortify))
+    return windowsortify

@@ -23,13 +23,13 @@ class GmailService:
         self.token_path = token_path
         self.creds = None
         self.service = None
+        self._label_cache = None  # ← ADDED from branch1
 
     def authenticate(self):
         """Authenticate with Gmail API"""
         if os.path.exists(self.token_path):
             self.creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
 
-        # If there are no (valid) credentials available, let the user log in.
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
@@ -37,7 +37,6 @@ class GmailService:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.credentials_path, SCOPES)
                 self.creds = flow.run_local_server(port=0)
-            # Save the credentials for the next run
             with open(self.token_path, 'w') as token:
                 token.write(self.creds.to_json())
 
@@ -63,12 +62,8 @@ class GmailService:
             return "N/A"
 
         try:
-            # Gmail API returns dates in RFC 2822 format or Unix timestamp
-            # Example: "Mon, 15 Nov 2021 10:30:00 +0100"
-
-            # Try parsing common formats
             formats = [
-                "%a, %d %b %Y %H:%M:%S %z",  # RFC 2822
+                "%a, %d %b %Y %H:%M:%S %z",
                 "%d %b %Y %H:%M:%S %z",
                 "%Y-%m-%d %H:%M:%S",
             ]
@@ -84,7 +79,7 @@ class GmailService:
             if dt:
                 return dt.strftime("%Y.%m.%d %H:%M")
 
-            return date_str  # Return original if parsing fails
+            return date_str
         except Exception as e:
             print(f"Date parsing error: {e}")
             return date_str
@@ -108,7 +103,6 @@ class GmailService:
                 ).decode('utf-8', errors='ignore')
 
         elif mime_type.startswith('multipart/'):
-            # Recursively process multipart
             for subpart in part.get('parts', []):
                 sub_body = self._extract_body_from_part(subpart)
                 if sub_body['plain']:
@@ -134,11 +128,9 @@ class GmailService:
             payload = message.get('payload', {})
             body_data = {'plain': '', 'html': ''}
 
-            # Check if message has parts (multipart)
             if 'parts' in payload:
                 body_data = self._extract_body_from_part(payload)
             else:
-                # Single part message
                 body_data = self._extract_body_from_part(payload)
 
             return body_data
@@ -153,7 +145,6 @@ class GmailService:
         if mime_type:
             mime_types.append(mime_type)
 
-        # Recurse into subparts
         if 'parts' in part:
             for subpart in part['parts']:
                 self._extract_mime_types_recursive(subpart, mime_types)
@@ -172,10 +163,8 @@ class GmailService:
             sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown')
             date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
 
-            # Parse date
             formatted_date = self._parse_date_hungarian(date_str)
 
-            # Extract attachments
             attachments = []
             mime_types = []
 
@@ -183,20 +172,36 @@ class GmailService:
                 if 'filename' in part and part['filename']:
                     attachments.append(part['filename'])
 
-                # Extract MIME type
                 mime_type = part.get('mimeType')
                 if mime_type:
                     mime_types.append(mime_type)
 
-                # Recurse into parts
                 if 'parts' in part:
                     for subpart in part['parts']:
                         extract_attachments(subpart)
 
             extract_attachments(message['payload'])
 
-            # Get body (both plain and HTML)
             body_data = self.get_email_body(message_id)
+
+            # ========== ADDED: Gmail label extraction ==========
+            label_ids = message.get('labelIds', [])
+            gmail_tag = '----'
+
+            if label_ids:
+                sortify_categories = [
+                    "Vezetőség", "Hiányos", "Hibás csatolmány", "Hírlevél",
+                    "Neptun", "Tanulói", "Milton", "Moodle", "Egyéb"
+                ]
+
+                label_map = self.get_label_map()  # cache-elt címkék
+
+                for label_id in label_ids:
+                    label_name = label_map.get(label_id, '')
+                    if label_name in sortify_categories:
+                        gmail_tag = label_name.lower()
+                        break
+            # ====================================================
 
             return {
                 'message_id': message_id,
@@ -208,7 +213,8 @@ class GmailService:
                 'mime_types': '|'.join(mime_types) if mime_types else '',
                 'body_plain': body_data.get('plain', ''),
                 'body_html': body_data.get('html', ''),
-                'is_last_downloaded': 1  # Mark as newly downloaded
+                'tag': gmail_tag,  # ← ADDED
+                'is_last_downloaded': 1
             }
 
         except HttpError as error:
@@ -234,3 +240,14 @@ class GmailService:
         except HttpError as error:
             print(f'An error occurred: {error}')
             return None
+
+    def get_label_map(self):
+        """Get all Gmail labels (cached) - ADDED from branch1"""
+        if self._label_cache is None:
+            try:
+                labels_response = self.service.users().labels().list(userId='me').execute()
+                self._label_cache = {lbl['id']: lbl['name'] for lbl in labels_response.get('labels', [])}
+            except Exception as e:
+                print(f"[GMAIL] Label cache error: {e}")
+                self._label_cache = {}
+        return self._label_cache
