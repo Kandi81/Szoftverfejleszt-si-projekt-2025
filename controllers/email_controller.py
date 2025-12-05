@@ -79,7 +79,7 @@ class EmailController:
             # Step 2: Fetch email details (10-90%)
             gmail_emails = []
             total = len(messages)
-            
+
             for idx, msg in enumerate(messages, start=1):
                 try:
                     details = self.gmail.get_email_full_details(msg["id"])
@@ -88,10 +88,51 @@ class EmailController:
                     details["sender_name"] = name or addr
                     details["sender_domain"] = domain
                     details.setdefault("mime_types", [])
-                    details.setdefault("tag", "----")
                     details.setdefault("needs_more_info", 0)
                     details.setdefault("rule_applied", "")
+
+                    # DEBUG 1: Nyers Gmail válasz
+                    print(
+                        "[DEBUG][GMAIL-RAW]",
+                        "id=", details.get("id"),
+                        "labels=", details.get("gmail_labels"),
+                        "tag=", details.get("tag"),
+                    )
+
+                    # GMAIL LABEL → TAG normalizálás (amit már betettél)
+                    gmail_tag = details.get("tag")
+                    if gmail_tag:
+                        norm = gmail_tag.strip().lower()
+                        if norm in ["vezetőség", "vezetoseg"]:
+                            details["tag"] = "vezetoseg"
+                        elif norm in ["tanszék", "tanszek"]:
+                            details["tag"] = "tanszek"
+                        elif norm == "neptun":
+                            details["tag"] = "neptun"
+                        elif norm == "moodle":
+                            details["tag"] = "moodle"
+                        elif norm in ["milt-on", "milton"]:
+                            details["tag"] = "milt-on"
+                        elif norm in ["hiányos", "hianyos"]:
+                            details["tag"] = "hianyos"
+                        elif norm in ["egyéb", "egyeb"]:
+                            details["tag"] = "egyeb"
+                        else:
+                            # ismeretlen Gmail tag → NEM erőltetünk semmit, marad ----
+                            details["tag"] = "----"
+                    else:
+                        details.setdefault("tag", "----")
+
+                    # DEBUG 2: Normalizált állapot
+                    print(
+                        "[DEBUG][GMAIL-NORM]",
+                        "id=", details.get("id"),
+                        "gmail_labels=", details.get("gmail_labels"),
+                        "final_tag=", details.get("tag"),
+                    )
+
                     gmail_emails.append(details)
+
                 except Exception as e:
                     print(f"Hiba az üzenet feldolgozásakor: {e}")
                     continue
@@ -111,6 +152,8 @@ class EmailController:
             
             # Step 4: Sync with storage (95-100%)
             synced_emails = self.storage.sync_emails(gmail_emails)
+
+            print("[DEBUG][SYNC-OUT][0]", synced_emails[0] if synced_emails else None)
             
             app_state.all_emails = synced_emails
             app_state.update_categorized_counts()
@@ -320,3 +363,11 @@ class EmailController:
             print(f"[INFO] Tag saved for message_id={msg_id}: {new_tag}")
         except Exception as e:
             print(f"[ERROR] Failed to save tag change: {e}")
+
+        # --------- ÚJ: Gmail label szinkron ---------
+        if self.gmail:
+            try:
+                # new_tag: 'vezetoseg' / 'tanszek' / 'neptun' / 'moodle' / 'milt-on' / 'hianyos' / 'egyeb' / '----'
+                self.gmail.set_message_label(msg_id, new_tag)
+            except Exception as e:
+                print(f"[GMAIL] Failed to update label for {msg_id}: {e}")

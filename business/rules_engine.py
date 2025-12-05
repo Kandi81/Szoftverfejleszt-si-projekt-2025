@@ -210,17 +210,12 @@ def apply_rules(emails: List[Dict]) -> List[Dict]:
     - Skips emails that already have valid tags (manual or Gmail-based)
     - Only applies rules to emails with tag == '----'
     """
-    # Define valid Sortify categories (merged from both branches)
-    sortify_categories = {
-        "vezetoseg", "tanszek", "neptun", "moodle", "milt-on", "hianyos"
-    }
 
     for email_item in emails:
         current_tag = (email_item.get("tag") or "----").lower()
 
-        # MERGED SKIP LOGIC: Don't overwrite existing valid tags
-        # (from main: skip if not '----', from branch1: skip if valid Gmail tag)
-        if current_tag != "----" and current_tag in sortify_categories:
+        # NE ÍRD FELÜL a már meglévő normál címkéket (Gmail/kézi)
+        if current_tag in ["vezetoseg", "tanszek", "neptun", "moodle", "milt-on", "hianyos", "egyeb"]:
             continue
 
         sender_raw = email_item.get("sender", "")
@@ -257,11 +252,11 @@ def apply_rules(emails: List[Dict]) -> List[Dict]:
             email_item["rule_applied"] = "milt-on"
             continue
 
-        # Priority 6: Student emails (non-university domain) - MOVED TO END
-        if sender_domain and UNI_DOMAIN not in sender_domain:
-            email_item["tag"] = "hianyos"
-            email_item["rule_applied"] = "student_mail"
-            continue
+        # # Priority 6: Student emails (non-university domain) - MOVED TO END
+        # if sender_domain and UNI_DOMAIN not in sender_domain:
+        #     email_item["tag"] = "hianyos"
+        #     email_item["rule_applied"] = "student_mail"
+        #     continue
 
         # Default: Uncategorized/incomplete (keep as ----)
         email_item["tag"] = "----"
