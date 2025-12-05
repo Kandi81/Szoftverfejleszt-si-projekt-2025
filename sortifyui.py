@@ -680,7 +680,7 @@ def on_key_press(event):
 # ========== WINDOW & WIDGET CREATION ==========
 
 windowsortify = tk.Tk()
-windowsortify.title("Sortify v0.6.0")
+windowsortify.title("Sortify v1.0")
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1724x743")
 
