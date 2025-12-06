@@ -683,6 +683,7 @@ windowsortify = tk.Tk()
 windowsortify.title("Sortify v1.0")
 windowsortify.config(bg="#E4E2E2")
 windowsortify.geometry("1724x743")
+windowsortify.minsize(1724,743)
 
 style = ttk.Style(windowsortify)
 style.theme_use("clam")
