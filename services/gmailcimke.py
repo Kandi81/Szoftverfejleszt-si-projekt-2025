@@ -76,6 +76,7 @@ def create_default_labels() -> Dict[str, str]:
 def apply_label_to_message(message_id: str, label_name: str) -> None:
     """
     Egy konkrét emailhez címke hozzáadása.
+    Töröli az összes többi Sortify címkét az emailről.
 
     Args:
         message_id: Gmail message ID
@@ -84,19 +85,46 @@ def apply_label_to_message(message_id: str, label_name: str) -> None:
     gmail = _get_gmail_service()
     service = gmail.service
 
-    labels = ensure_labels([label_name])
-    label_id = labels[label_name]
+    # Az összes Sortify címke
+    sortify_categories = [
+        "Vezetőség", "Hiányos", "Hibás csatolmány", "Hírlevél",
+        "Neptun", "Tanulói", "Milton", "Moodle", "Egyéb"
+    ]
+
+    # Biztosítjuk, hogy létezzenek a címkék
+    all_labels = ensure_labels(sortify_categories)
+
+    # Új címke ID
+    new_label_id = all_labels.get(label_name)
+
+    if not new_label_id:
+        print(f"[GMAIL-LABEL] ✗ HIBA: '{label_name}' címke nem található!")
+        return
+
+    # Többi Sortify címke ID-k (amiket törölni kell)
+    remove_label_ids = [
+        label_id for cat, label_id in all_labels.items()
+        if cat != label_name  # ← NE töröljük az újat!
+    ]
+
+    print(f"[GMAIL-LABEL] Címke módosítás:")
+    print(f"  Hozzáadandó: '{label_name}' (ID: {new_label_id})")
+    print(f"  Törlendő címkék: {len(remove_label_ids)} db")
 
     body = {
-        "addLabelIds": [label_id],
-        "removeLabelIds": []
+        "addLabelIds": [new_label_id],
+        "removeLabelIds": remove_label_ids
     }
-    service.users().messages().modify(
+
+    result = service.users().messages().modify(
         userId="me",
         id=message_id,
         body=body
     ).execute()
+
     print(f'✅ Címke hozzáadva: "{label_name}" → message {message_id}')
+    print(f'   Törölt címkék: {len(remove_label_ids)} db')
+    print(f'[GMAIL] Labels updated: add={body["addLabelIds"]}, remove={remove_label_ids[:3]}...')
 
 
 def apply_label_to_messages(message_ids: List[str], label_name: str) -> None:
