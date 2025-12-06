@@ -207,7 +207,7 @@ class EmailController:
             messagebox.showinfo("Info",
                               f"A kiválasztott {len(uncategorized)} email nem illeszkedik "
                               f"egyik szabályhoz sem.\n\n"
-                              f"Ellenőrizze a config/settings.ini fájlt.")
+                              f"Használja az AI Címkézés gombot, vagy állítsa be manuálisan a jobb oldali legördülő menüből.")
             return 0
         
         # Save changes
