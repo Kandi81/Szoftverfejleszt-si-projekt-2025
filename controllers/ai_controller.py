@@ -210,7 +210,7 @@ class AIController:
 
         print(f"[AI-LABEL] Email: '{subject}'")
         print(f"[AI-LABEL] Message ID: '{message_id}'")
-#################DEBUG#########################
+#################DEBUG############
         print(f"[AI-LABEL-DEBUG] Email adatok:")
         print(f"  sender_name: '{sender_name}'")
         print(f"  sender: '{email_data.get('sender', 'N/A')}'")
