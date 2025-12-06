@@ -429,18 +429,25 @@ def ai_label_single_email():
     print(f"[AI-LABEL] Running for '{email_data.get('subject', '')}'...")
 
     try:
+        # AI címkézés (ez már ráírja a Gmail-re is!)
         ai_controller.auto_label_email(email_data)
 
+        # TreeView frissítése
         current_values = list(treeemails.item(item_id, "values"))
         current_values[2] = email_data.get("tag", "----")
         treeemails.item(item_id, values=current_values)
 
+        # Részletek panel frissítése
         update_details_panel(email_data)
 
-        # Save to CSV and Gmail
-        ai_tag = email_data.get("tag", "----")
-        email_controller.update_tag_for_email(email_data, ai_tag)
+        # CSAK CSV mentés, Gmail címke már meg van!
+        # (a auto_label_email már meghívta az apply_label_to_message-t)
+        if email_controller:
+            # Save csak CSV-be, NE írjon Gmail-re
+            email_controller.storage.save_emails(app_state.all_emails)
+            print(f"[INFO] Tag saved for message_id={email_data.get('message_id')}: {email_data.get('tag')}")
 
+        # Címke számok frissítése
         update_tag_counts_from_storage(app_state.all_emails)
 
         messagebox.showinfo(
@@ -449,7 +456,8 @@ def ai_label_single_email():
         )
     except Exception as e:
         messagebox.showerror("Hiba", f"AI címkézés sikertelen:\n{e}")
-
+        import traceback
+        traceback.print_exc()
 
 
 def get_emails(_event):
