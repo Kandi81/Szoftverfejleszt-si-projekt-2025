@@ -57,31 +57,38 @@ class GmailService:
             return []
 
     def _parse_date_hungarian(self, date_str):
-        """Parse email date and return in Hungarian format: YYYY.MM.DD HH:MM"""
+        """Parse email date and return in Hungarian format: YYYY.MM.DD HH:MM (CET/CEST local time)"""
         if not date_str:
             return "N/A"
 
         try:
-            formats = [
-                "%a, %d %b %Y %H:%M:%S %z",
-                "%d %b %Y %H:%M:%S %z",
-                "%Y-%m-%d %H:%M:%S",
-            ]
+            # Ha már magyar formátum, hagyd úgy
+            if re.match(r'^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}$', date_str):
+                return date_str
 
-            dt = None
-            for fmt in formats:
-                try:
-                    dt = datetime.strptime(date_str, fmt)
-                    break
-                except ValueError:
-                    continue
+            # MINDIG használd az email.utils.parsedate_to_datetime-ot (ez kezeli a timezone-okat)
+            from email.utils import parsedate_to_datetime
 
-            if dt:
-                return dt.strftime("%Y.%m.%d %H:%M")
+            dt = parsedate_to_datetime(date_str)
 
-            return date_str
+            # Konvertálás lokális időzónára (CET/CEST)
+            if dt.tzinfo is not None:
+                dt_local = dt.astimezone()
+            else:
+                # Ha nincs timezone info, feltételezzük UTC-t és konvertáljuk
+                from datetime import timezone
+                dt = dt.replace(tzinfo=timezone.utc)
+                dt_local = dt.astimezone()
+
+            result = dt_local.strftime("%Y.%m.%d %H:%M")
+
+            # DEBUG: írd ki az eredeti és konvertált időt
+            print(f"[DATE-DEBUG] Eredeti: {date_str[:50]} → Lokális: {result}")
+
+            return result
+
         except Exception as e:
-            print(f"Date parsing error: {e}")
+            print(f"[DATE] Parse error for '{date_str[:50]}': {e}")
             return date_str
 
     def _extract_body_from_part(self, part):
