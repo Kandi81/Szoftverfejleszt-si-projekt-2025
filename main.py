@@ -20,7 +20,7 @@ from models import app_state
 def main():
     """Main entry point"""
     print("=" * 50)
-    print("Sortify v0.6.0 - AI + Gmail Integration")  # ← Updated version
+    print("Sortify v1.0.0 - AI + Gmail Integration")  # ← Updated version
     print("=" * 50)
     print()
 
