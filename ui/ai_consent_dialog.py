@@ -110,17 +110,19 @@ Név
 Email cím
 Gmail authentikáció
 
-
 Az alkalmazás használata során hozzáférhető adatokat a mesterséges intelligencia (a továbbiakban: AI) is kezeli, az AI minden bejövő e-mail tartalmát automatikusan elemzi, amely személyes adatok nagy mennyiségű technikai feldolgozását jelenti.
 Az alkalmazás által végzett automatizált e-mail-címkézéshez igénybe vett AI alapú megoldás profilalkotást valósíthat meg.
 Az e-mailek tartalma - az alkalmazás felhasználási módja okán - továbbításra kerülhet a feldolgozás során használt külső AI-szolgáltatóhoz, amely adatfeldolgozóként jár el.
+Az adatfeldolgozó egyes e‑mail‑feldolgozási folyamataiban – különösen a beérkező levelek automatikus kategorizálása és összefoglalása során – külső mesterségesintelligencia‑szolgáltatót vesz igénybe.
+Ennek keretében az oktatókhoz, ügyintézőkhöz érkező e‑mailek bizonyos adatai (különösen: feladó neve és e‑mail címe, címzettek, a levél tárgya és szöveges tartalma) továbbításra kerülhetnek a szolgáltató részére, kizárólag ezen funkciók nyújtása céljából.
+Amennyiben a Sortify alkalmazást munkáltatói (céges) e‑mail‑fiókhoz kapcsolják, a munkavállaló a munkaszerződés és a vonatkozó belső szabályzatok elfogadásával tudomásul veszi, hogy a céges e‑mail‑fiók elsődlegesen munkavégzési célokat szolgál. A céges e‑mail‑fiókba érkező és onnan küldött üzenetek – ideértve azok személyes adatot tartalmazó részeit is – a munkáltató jogos érdekén alapuló, automatizált ellenőrzés és AI‑alapú feldolgozás tárgyát képezhetik (pl. levelek kategorizálása, ügyintézési feladatok szervezése céljából). A magáncélú levelezésre a céges e‑mail‑fiók ilyen esetben nem, vagy csak a munkáltató szabályzataiban meghatározott korlátok között használható.
 Amennyiben az AI által végzett email feldolgozáshoz a felhasználó nem járul hozzá, az alkalmazás használatát mellőznie kell. 
 Az adatkezelés célja
 A felhasználás során kezelt adatok használata az alkalmazás működtetéséhez, a felhasználó email címkézésének megvalósítása érdekében szükséges. 
 Az adatkezelés időtartama
 A felhasználás során megadott személyes adatok kezelése a regisztrációval kezdődik és az adatok törléséig tart. Az adatok törlésére akkor kerül sor, amikor azokra a létrejött szerződés teljesítése körében szükség már nincsen, így Ptk. elévülésről szóló rendelkezései (6: 21 – 6: 25 §), illetve Számviteli tv. 169. § (2) alapján az adatokat az utolsó szerződés keltétől számított 5 évig, a keletkező bizonylatokat az utolsó szerződés keltétől számított 8 évig őrzi meg.
 Adatbiztonság
-Az adatkezelő minden szükséges lépést megtesz, hogy biztosítsa a Felhasználók által megadott személyes adatok biztonságát mind a hálózati kommunikáció során, mind az adatok tárolása, őrzése során. Az AI általi adatkezelésért az alkalmazott meseterséges intelligencia üzemeltetője felelős az AI adatkezelési tájékoztatójában foglaltak szerint. 
+Az adatkezelő minden szükséges lépést megtesz, hogy biztosítsa a Felhasználók által megadott személyes adatok biztonságát mind a hálózati kommunikáció során, mind az adatok tárolása, őrzése során. Az AI általi adatkezelésért az alkalmazott mesterséges intelligencia üzemeltetője felelős az AI adatkezelési tájékoztatójában foglaltak szerint. 
 Az adatvédelmi nyilatkozat egyoldalú módosításának lehetősége
 Az adatkezelő fenntartja a jogot, hogy jelen adatvédelmi nyilatkozatot a Felhasználók előzetes értesítése mellett egyoldalúan módosítsa. A módosítás hatályba lépését követően a felhasználó ráutaló magatartással elfogadja a hatályos módosított adatvédelmi nyilatkozatot. A módosítás nem érintheti a jogszabályokban előírt adatvédelmi kötelezettségeket.
  A Felhasználó jogai és érvényesítésük
