@@ -321,8 +321,7 @@ def update_details_panel(email_data):
             att_text.insert('end',
                             f"📎 Fájl: {filename}\n\n"
                             f"✓ A fájl automatikus ellenőrzésen átment\n"
-                            f"✓ Nem tartalmaz gyanús kiterjesztést\n\n"
-                            f"[AI összefoglaló a csatolmány tartalmáról - funkció fejlesztés alatt]")
+                            f"✓ Nem tartalmaz gyanús kiterjesztést\n\n")
         att_text.config(state='disabled')
 
 
