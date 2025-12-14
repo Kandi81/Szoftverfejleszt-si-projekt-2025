@@ -16,13 +16,13 @@ VSVersionInfo(
       StringTable(
         u'040904B0',
         [StringStruct(u'CompanyName', u'Milton Uni - GI5A'),
-        StringStruct(u'FileDescription', u'Sortify Email Manager v1.0.0'),
-        StringStruct(u'FileVersion', u'1.0.0.0'),
+        StringStruct(u'FileDescription', u'Sortify Email Manager v1.2.0'),
+        StringStruct(u'FileVersion', u'1.2.0.0'),
         StringStruct(u'InternalName', u'Sortify'),
         StringStruct(u'LegalCopyright', u'Copyright (c) 2025'),
         StringStruct(u'OriginalFilename', u'Sortify.exe'),
         StringStruct(u'ProductName', u'Sortify'),
-        StringStruct(u'ProductVersion', u'1.0.0.0')])
+        StringStruct(u'ProductVersion', u'1.2.0.0')])
       ]
     ),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
