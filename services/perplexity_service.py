@@ -4,6 +4,8 @@ OpenAI-compatible Chat Completions API
 """
 import time
 import os
+from pathlib import Path
+import sys
 from typing import Optional
 from perplexity import Perplexity
 
@@ -24,28 +26,39 @@ class PerplexityService:
         self.model = model
         self.fallback_model = "sonar"  # Fallback to basic sonar if errors
 
+    from pathlib import Path
+    import sys
+
     def _load_api_key_from_file(self, path: str = "resource/perp_api_key.txt") -> Optional[str]:
         """Load API key from file if exists
 
         Args:
-            path: Path to API key file
+            path: Path to API key file (relative to exe/script dir)
 
         Returns:
             API key string or None
         """
-        if os.path.exists(path):
+        # Get base directory - works in both dev and PyInstaller exe
+        if getattr(sys, 'frozen', False):
+            base_dir = Path(sys.executable).parent
+        else:
+            base_dir = Path(__file__).resolve().parent.parent  # Go up from services/ to project root
+
+        full_path = base_dir / path
+
+        if full_path.exists():
             try:
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(full_path, 'r', encoding='utf-8') as f:
                     key = f.read().strip()
-                    if key and key.startswith('pplx-'):  # Perplexity keys start with pplx-
-                        print(f"[PERPLEXITY] API key loaded from {path}")
+                    if key and key.startswith('pplx-'):
+                        print(f"[PERPLEXITY] API key loaded from {full_path}")
                         return key
                     else:
-                        print(f"[PERPLEXITY] Invalid API key format in {path}")
+                        print(f"[PERPLEXITY] Invalid API key format in {full_path}")
             except Exception as e:
-                print(f"[PERPLEXITY] Error reading API key from {path}: {e}")
+                print(f"[PERPLEXITY] Error reading API key from {full_path}: {e}")
         else:
-            print(f"[PERPLEXITY] API key file not found: {path}")
+            print(f"[PERPLEXITY] API key file not found: {full_path}")
 
         # Fallback to environment variable
         env_key = os.getenv('PERPLEXITY_API_KEY')
