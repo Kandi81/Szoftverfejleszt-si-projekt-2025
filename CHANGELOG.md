@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2025-12-14
+
+### Changed
+- AI‑hozzájárulási (consent) szöveg frissítve és pontosítva.
+- Hibajelzések szövege átfogalmazva, érthetőbb lett a felhasználók számára.
+- Dátumkijelzés egységesítve, minden nézetben azonos formátumban jelenik meg.
+
+### Fixed
+- AI által generált kategorizálás stabilitása javítva; teljes újrakategorizáláskor nem fut hibára, a régi címkéket megbízhatóan felülírja.
+- Minimum ablakméret beállítása, hogy a felület elemei mindig használhatóan jelenjenek meg.
+
+---
+
 ## [1.0.0] - 2025-12-05
 
 ### Added
